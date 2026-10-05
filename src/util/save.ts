@@ -43,6 +43,7 @@ import { DEFAULT_MAP_STYLE } from '../map/map-style';
 import { ParamState } from '../redux/param/param-slice';
 import type { DateRow, LineGroup, TimelineLine, ActionRow, TimelineDiff } from '../constants/timeline';
 import { TextLanguage } from './fonts';
+import { reconcileLineDefinitions } from './line-definitions';
 
 /**
  * The save format of the project.
@@ -1136,6 +1137,12 @@ export const UPGRADE_COLLECTION: { [version: number]: (param: string) => string 
     78: param =>
         // Bump save version to support Wuhan facilities.
         JSON.stringify({ ...JSON.parse(param), version: 79 }),
-    /** Bump save version to support animation timeline. Timeline state is optional and old saves load without it. */
-    79: param => JSON.stringify({ ...JSON.parse(param), version: 80 }),
+    /**
+     * Bump save version: reconcile line definitions for the new line information system.
+     * Timeline state is optional and old saves load without it.
+     */
+    79: param => {
+        const save = JSON.parse(param) as RMPSave;
+        return JSON.stringify({ ...save, version: 80, graph: reconcileLineDefinitions(save.graph) });
+    },
 };

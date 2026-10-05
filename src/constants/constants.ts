@@ -1,5 +1,6 @@
 import { ColourHex, MonoColour } from '@railmapgen/rmg-palette-resources';
 import { ExternalLinePathAttributes, ExternalLineStyleAttributes, LinePathType, LineStyleType } from './lines';
+import type { LineDefinition } from './line-definitions';
 import { MiscNodeAttributes, MiscNodeType } from './nodes';
 import { ExternalStationAttributes, StationType } from './stations';
 
@@ -81,6 +82,10 @@ export type EdgeAttributes = BaseAttributes & {
 } & Partial<ExternalLinePathAttributes> &
     Partial<ExternalLineStyleAttributes>;
 
+/**
+ * A props interface for all specific attributes components
+ * that give users an input (UI) to change attributes.
+ */
 export interface AttrsProps<T> {
     /**
      * Type should be StnId | LineId | MiscNodeId, need another generic parameter.
@@ -123,6 +128,9 @@ export interface TimelineEntry {
 export type GraphAttributes = {
     name?: string;
     timeline?: Array<Id | TimelineEntry>;
+    lineDefinitions?: LineDefinition[];
+    /** Explicitly removed memberships stay outside automatic line discovery until reassigned. */
+    unassignedLineEdgeIds?: string[];
 };
 export type ActiveType = Id | 'background';
 

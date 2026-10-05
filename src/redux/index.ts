@@ -8,6 +8,7 @@ import paramReducer from './param/param-slice';
 import runtimeReducer from './runtime/runtime-slice';
 import timelineReducer from './timeline/timeline-slice';
 import viewportReducer from './viewport/viewport-slice';
+import { lineDefinitionMiddleware } from './line-definition-middleware';
 
 enableMapSet();
 
@@ -28,8 +29,14 @@ export const createStore = (preloadedState: Partial<RootState> = {}) =>
     configureStore({
         reducer: rootReducer,
         middleware: getDefaultMiddleware =>
-            // undo slice contains MultiDirectedGraph instance, it is not meant to be serialized nor persisted
-            getDefaultMiddleware({ serializableCheck: false }).prepend(listenerMiddleware.middleware),
+            // undo slice contains MultiDirectedGraph instance, it is not meant to be serialized nor persisted.
+            // Runtime state also deliberately contains transient Sets, so the serializable state check
+            // is disabled and the line definition middleware is prepended.
+            // https://stackoverflow.com/questions/61704805/getting-an-error-a-non-serializable-value-was-detected-in-the-state-when-using
+            getDefaultMiddleware({ serializableCheck: false }).prepend(
+                listenerMiddleware.middleware,
+                lineDefinitionMiddleware
+            ),
         preloadedState,
     });
 const store = createStore();

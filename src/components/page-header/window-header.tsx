@@ -4,7 +4,7 @@ import rmgRuntime, { RmgEnv } from '@railmapgen/rmg-runtime';
 import { LANGUAGE_NAMES, LanguageCode } from '@railmapgen/rmg-translate';
 import React from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { MdHelp, MdRedo, MdSettings, MdTimeline, MdTranslate, MdUndo } from 'react-icons/md';
+import { MdHelp, MdRedo, MdRoute, MdSettings, MdTimeline, MdTranslate, MdUndo } from 'react-icons/md';
 import { Events, LocalStorageKey } from '../../constants/constants';
 import { useRootDispatch, useRootSelector } from '../../redux';
 import { redoAction, undoAction } from '../../redux/project-history';
@@ -16,6 +16,7 @@ import { MapToggleButton } from './map-toggle-button';
 import { SearchPopover } from './search-popover';
 import SettingsModal from './settings-modal';
 import { ZoomPopover } from './zoom-popover';
+import { LineInfoModal } from './line-info-modal';
 
 interface WindowHeaderProps {
     onTimelineClick: () => void;
@@ -33,6 +34,7 @@ export default function WindowHeader({ onTimelineClick }: WindowHeaderProps) {
     const [isSettingsModalOpen, setIsSettingsModalOpen] = React.useState(false);
     const [isAboutModalOpen, setIsAboutModalOpen] = React.useState(false);
     const [isTimelineTooltipOpen, setIsTimelineTooltipOpen] = React.useState(false);
+    const [isLineInfoOpen, setIsLineInfoOpen] = React.useState(false);
 
     const environment = useReadyConfig(rmgRuntime.getEnv);
     const appVersion = useReadyConfig(rmgRuntime.getAppVersion);
@@ -128,6 +130,15 @@ export default function WindowHeader({ onTimelineClick }: WindowHeaderProps) {
 
                     <DownloadActions />
 
+                    <IconButton
+                        size="sm"
+                        variant="ghost"
+                        aria-label={t('header.lineInfo.title')}
+                        title={t('header.lineInfo.title')}
+                        icon={<MdRoute />}
+                        onClick={() => setIsLineInfoOpen(true)}
+                    />
+
                     {rmgRuntime.isStandaloneWindow() && (
                         <Menu>
                             <MenuButton as={IconButton} icon={<MdTranslate />} variant="ghost" size="sm" />
@@ -160,6 +171,7 @@ export default function WindowHeader({ onTimelineClick }: WindowHeaderProps) {
             </Flex>
 
             <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
+            <LineInfoModal isOpen={isLineInfoOpen} onClose={() => setIsLineInfoOpen(false)} />
             <AboutModal isOpen={isAboutModalOpen} onClose={() => setIsAboutModalOpen(false)} />
         </RmgWindowHeader>
     );
