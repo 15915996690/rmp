@@ -1,9 +1,10 @@
-import { Alert, AlertIcon, Box, Button, Flex, HStack, Link, Text, useColorModeValue, useToast } from '@chakra-ui/react';
+import { Alert, AlertIcon, Link, Text } from '@chakra-ui/react';
 import { RmgErrorBoundary, RmgThemeProvider, RmgWindow } from '@railmapgen/rmg-components';
 import rmgRuntime from '@railmapgen/rmg-runtime';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { LocalStorageKey, NodeId } from '../constants/constants';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { LocalStorageKey } from '../constants/constants';
 import { useRootDispatch, useRootSelector } from '../redux';
 import { saveGraph } from '../redux/param/param-slice';
 import {
@@ -18,34 +19,9 @@ import { addNodeVersion, applyNodeVersion, getCurrentNodeVersion, renameNodeVers
 import { NOTIFICATION_EVENT } from '../util/notifications';
 import { useTimelineDiff } from '../hooks/useTimelineDiff';
 
-/**
- * 包装 React.lazy：动态 chunk 拉取失败（发版切换窗口期或瞬时网络抖动）时自动刷新页面一次，
- * 避免用户直接卡在全局错误页。同一 session 只重试一次，防止持续故障时陷入刷新死循环。
- */
-const lazyWithRetry: typeof React.lazy = factory =>
-    React.lazy(async () => {
-        try {
-            const loaded = await factory();
-            window.sessionStorage.removeItem('lazy-chunk-reload');
-            return loaded;
-        } catch (error) {
-            if (!window.sessionStorage.getItem('lazy-chunk-reload')) {
-                window.sessionStorage.setItem('lazy-chunk-reload', '1');
-                window.location.reload();
-                // 页面卸载前保持 Suspense 挂起，避免错误边界先闪现
-                return new Promise(() => {});
-            }
-            throw error;
-        }
-    });
-
-const PageHeader = lazyWithRetry(() => import('./page-header/page-header'));
-const ToolsPanel = lazyWithRetry(() => import('./panels/tools/tools'));
-const SvgWrapper = lazyWithRetry(() => import('./svg-wrapper'));
-const DetailsPanel = lazyWithRetry(() => import('./panels/details/details'));
-const RmgPaletteAppClip = lazyWithRetry(() => import('./panels/rmg-palette-app-clip'));
-const TimelineEditorPanel = lazyWithRetry(() => import('./panels/timeline/timeline-editor'));
-const TimelinePlayer = lazyWithRetry(() => import('./timeline/timeline-player'));
+const PageHeader = React.lazy(() => import('./page-header/page-header'));
+const EditorPage = React.lazy(() => import('./pages/editor-page'));
+const RmgPaletteAppClip = React.lazy(() => import('./panels/rmg-palette-app-clip'));
 
 export default function AppRoot() {
     const dispatch = useRootDispatch();
@@ -186,97 +162,50 @@ export default function AppRoot() {
     return (
         <RmgThemeProvider>
             <RmgWindow>
-                <React.Suspense fallback={loadingFallback}>
-                    <PageHeader onTimelineClick={handleOpenTimelinePanel} />
-                </React.Suspense>
+                <BrowserRouter basename={import.meta.env.BASE_URL}>
+                    <React.Suspense fallback={loadingFallback}>
+                        <PageHeader />
+                    </React.Suspense>
 
-                {isShowRMTMessage && (
-                    <Alert status="info" variant="solid" size="xs" pl={3} pr={1} py={1} zIndex="1">
-                        <AlertIcon />
-                        <Text>
-                            <Link href="/?app=rmp" isExternal fontWeight="bold">
-                                {t('rmtPromotion')}
-                            </Link>{' '}
-                            <Link
-                                as="button"
-                                ml="auto"
-                                textDecoration="underline"
-                                onClick={() => setIsShowRMTMessage(false)}
-                            >
-                                {t('close')}
-                            </Link>
-                            {' | '}
-                            <Link
-                                as="button"
-                                textDecoration="underline"
-                                onClick={() => {
-                                    setIsShowRMTMessage(false);
-                                    window.localStorage.setItem(LocalStorageKey.DO_NOT_SHOW_RMT_MSG, 'true');
-                                }}
-                            >
-                                {t('noShowAgain')}
-                            </Link>
-                        </Text>
-                    </Alert>
-                )}
-
-                {placingNodeVersion && (
-                    <Box
-                        position="fixed"
-                        top="40px"
-                        left="50%"
-                        transform="translateX(-50%)"
-                        bg={bgColor}
-                        px={4}
-                        py={2}
-                        borderRadius="md"
-                        boxShadow="lg"
-                        zIndex="modal"
-                    >
-                        <HStack>
-                            <Text fontWeight="bold">
-                                {t(
-                                    'panel.details.nodeVersion.placingNewWithId',
-                                    '正在编辑节点{id}，完成后请点击确定按钮。',
-                                    { id: placingNodeVersion.nodeId }
-                                )}
+                    {isShowRMTMessage && (
+                        <Alert status="info" variant="solid" size="xs" pl={3} pr={1} py={1} zIndex="1">
+                            <AlertIcon />
+                            <Text>
+                                <Link href="/?app=rmp" isExternal fontWeight="bold">
+                                    {t('rmtPromotion')}
+                                </Link>{' '}
+                                <Link
+                                    as="button"
+                                    ml="auto"
+                                    textDecoration="underline"
+                                    onClick={() => setIsShowRMTMessage(false)}
+                                >
+                                    {t('close')}
+                                </Link>
+                                {' | '}
+                                <Link
+                                    as="button"
+                                    textDecoration="underline"
+                                    onClick={() => {
+                                        setIsShowRMTMessage(false);
+                                        window.localStorage.setItem(LocalStorageKey.DO_NOT_SHOW_RMT_MSG, 'true');
+                                    }}
+                                >
+                                    {t('noShowAgain')}
+                                </Link>
                             </Text>
-                            {showConfirmButton && (
-                                <Button size="sm" colorScheme="blue" onClick={handleConfirmPlace}>
-                                    {t('ok', '确定')}
-                                </Button>
-                            )}
-                            <Button size="sm" variant="outline" onClick={handleCancelPlace}>
-                                {t('cancel', '取消')}
-                            </Button>
-                        </HStack>
-                    </Box>
-                )}
+                        </Alert>
+                    )}
 
-                <RmgErrorBoundary allowReset>
-                    <Flex direction="row" height="100%" overflow="hidden" sx={{ position: 'relative' }}>
-                        {/* `position: 'relative'` is used to make sure RmgSidePanel in DetailsPanel
-                        have the right parent container for its `position: 'absolute'` calculation. */}
-                        <React.Suspense fallback={null}>
-                            <ToolsPanel />
-                        </React.Suspense>
+                    <RmgErrorBoundary allowReset>
                         <React.Suspense fallback={loadingFallback}>
-                            <SvgWrapper />
+                            <Routes>
+                                <Route path="/" element={<EditorPage isMapOverview={isMapOverview} />} />
+                                <Route path="*" element={<Navigate to="/" replace />} />
+                            </Routes>
                         </React.Suspense>
-                        <React.Suspense fallback={null}>
-                            <DetailsPanel zIndex={panelZIndex.details} />
-                        </React.Suspense>
-                        {timelineFeatureEnabled && (
-                            <React.Suspense fallback={null}>
-                                <TimelineEditorPanel
-                                    isOpen={isTimelinePanelOpen}
-                                    onClose={handleCloseTimelinePanel}
-                                    zIndex={panelZIndex.timeline}
-                                />
-                            </React.Suspense>
-                        )}
-                    </Flex>
-                </RmgErrorBoundary>
+                    </RmgErrorBoundary>
+                </BrowserRouter>
 
                 <React.Suspense fallback={null}>
                     <RmgPaletteAppClip

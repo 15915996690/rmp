@@ -2,8 +2,19 @@ import { MultiDirectedGraph } from 'graphology';
 import { describe, expect, it } from 'vitest';
 import { EdgeAttributes, GraphAttributes, NodeAttributes } from '../../constants/constants';
 import { MiscNodeType } from '../../constants/nodes';
-import store from '../index';
-import appReducer, { applyRedoAction, applyUndoAction, MAX_UNDO_SIZE, saveGraph } from './param-slice';
+import { DEFAULT_MAP_STYLE } from '../../map/map-style';
+import store from '../store';
+import appReducer, {
+    applyRedoAction,
+    applyUndoAction,
+    HistoryEntry,
+    initializeProject,
+    MAX_UNDO_SIZE,
+    ParamGraph,
+    saveGraph,
+    setMapEnabled,
+    setMapStyle,
+} from './param-slice';
 
 const realStore = store.getState();
 const emptySerializedGraph = new MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>().export();

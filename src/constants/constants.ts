@@ -115,14 +115,21 @@ export type NodeId = StnId | MiscNodeId;
 
 export type Id = NodeId | LineId;
 
-export interface TimelineEntry {
-    id: Id;
-    reverse?: boolean;
-    /**
-     * Historical version of the node to use at this timeline position.
-     * Only applicable when id is a node. If undefined, the current version (v1) is used.
-     */
-    version?: number;
+export type GraphAttributes = {
+    name?: string;
+    lineDefinitions?: LineDefinition[];
+    /** Explicitly removed memberships stay outside automatic line discovery until reassigned. */
+    unassignedLineEdgeIds?: string[];
+};
+
+/** Viewport context supplied to an editor overlay. */
+export interface OverlayProps<T extends Id> {
+    /** The single selected graph element whose direct-manipulation UI is being shown. */
+    id: T;
+    /** Used to keep handles visually usable instead of shrinking or growing with the canvas. */
+    svgViewBoxZoom: number;
+    /** Used to convert screen pointer positions into SVG coordinates. */
+    svgViewBoxMin: PathPoint;
 }
 
 export type GraphAttributes = {
@@ -203,6 +210,7 @@ export enum LocalStorageKey {
     PARAM = 'rmp__param',
     PARAM_BACKUP = 'rmp__param__backup',
     DO_NOT_SHOW_RMT_MSG = 'rmp__doNotShowRMTMsg',
+    TIMELINE_ONBOARDING_DISMISSED = 'rmp__timelineOnboardingDismissed_v1',
     ACCOUNT = 'rmg-home__account',
     LANGUAGE = 'rmp__language',
 }

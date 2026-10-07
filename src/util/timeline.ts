@@ -1,649 +1,692 @@
 import { MultiDirectedGraph } from 'graphology';
-import { AttributesWithColor, dynamicColorInjection } from '../components/panels/details/color-field';
-import { DualColorAttributes } from '../components/svgs/lines/styles/dual-color';
-import { GenericAttributes } from '../components/svgs/lines/styles/generic';
+import { nanoid } from 'nanoid';
 import {
+    CityCode,
     EdgeAttributes,
     GraphAttributes,
     Id,
     LineId,
     NodeAttributes,
     NodeId,
-    NodeVersion,
     Theme,
-    TimelineEntry,
 } from '../constants/constants';
-import { ActionRow } from '../constants/timeline';
-import { LineStyleType } from '../constants/lines';
+import {
+    createEmptyTimelineDocument,
+    DEFAULT_TIMELINE_SETTINGS,
+    isElementEntry,
+    isNodeTimelineEntry,
+    isPauseEntry,
+    isTimelineCameraZoom,
+    TimelineDocument,
+    TimelineAudioEntry,
+    TimelineLabelEntry,
+    TIMELINE_LABEL_DEFAULT_SECONDS,
+    TimelineElementEntry,
+    TimelineEntry,
+    TimelineKeyframeEntry,
+    TimelinePauseEntry,
+    TimelinePausePosition,
+    TimelinePhase,
+    TimelineSettings,
+} from '../constants/timeline';
 
-/**
- * Get the current timeline from graph attributes, or empty array if none.
- */
-export const normalizeTimeline = (timeline: Array<Id | TimelineEntry> | undefined): TimelineEntry[] => {
-    return (timeline ?? []).map(item =>
-        typeof item === 'string'
-            ? { id: item }
-            : {
-                  id: item.id,
-                  ...(item.reverse ? { reverse: true } : {}),
-                  ...(item.version ? { version: item.version } : {}),
-              }
-    );
-};
+type TimelineGraph = MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
 
-export const getTimeline = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>
-): TimelineEntry[] => {
-    return normalizeTimeline(graph.getAttribute('timeline'));
-};
+export interface TimelineCoverage {
+    missingNodeIds: NodeId[];
+    missingEdgeIds: LineId[];
+    missingIds: Id[];
+    missingNodeCount: number;
+    missingEdgeCount: number;
+    isComplete: boolean;
+}
 
-/**
- * Set the timeline in graph attributes.
- */
-export const setTimeline = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    timeline: TimelineEntry[]
-): void => {
-    graph.setAttribute(
-        'timeline',
-        timeline.map(item => ({
-            id: item.id,
-            ...(item.reverse ? { reverse: true } : {}),
-            ...(item.version ? { version: item.version } : {}),
-        }))
-    );
-};
-
-/**
- * Extract all color themes from a single edge's style attributes.
- * Handles dynamicColorInjection styles (.color), DualColor (.colorA/.colorB),
- * and Generic (.layers[].color).
- */
-export const getEdgeThemes = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    edge: string
-): Theme[] => {
-    const attr = graph.getEdgeAttributes(edge);
-    const style = attr.style;
-
-    if (dynamicColorInjection.has(style)) {
-        const color = (attr[style] as AttributesWithColor).color;
-        return color ? [color] : [];
-    }
-    if (style === LineStyleType.DualColor) {
-        const dc = attr[LineStyleType.DualColor] as DualColorAttributes | undefined;
-        if (!dc) return [];
-        const result: Theme[] = [];
-        if (dc.colorA) result.push(dc.colorA);
-        if (dc.colorB) result.push(dc.colorB);
-        return result;
-    }
-    if (style === LineStyleType.Generic) {
-        const ga = attr[LineStyleType.Generic] as GenericAttributes | undefined;
-        if (!ga?.layers) return [];
-        return ga.layers.map(l => l.color).filter(Boolean);
-    }
-    return [];
-};
-
-/**
- * Find all unique themes on edges connected to a given node.
- * Supports dynamicColorInjection, DualColor, and Generic styles.
- */
-export const findThemesAtNode = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    node: NodeId
-): Theme[] => {
-    const themes: Theme[] = [];
-    const seen = new Set<string>();
-    for (const { edge } of graph.edgeEntries(node)) {
-        for (const color of getEdgeThemes(graph, edge)) {
-            // 按小写十六进制去重：#e3002b 与 #E3002B 是同一个主题
-            const key = color[2].toLowerCase();
-            if (!seen.has(key)) {
-                seen.add(key);
-                themes.push(color);
-            }
-        }
-    }
-    return themes;
-};
-
-/**
- * Check whether an edge's theme matches the target theme by hex color.
- * Supports dynamicColorInjection, DualColor, and Generic styles.
- *
- * Hex color strings may be stored with different letter cases (e.g. "#e3002b"
- * vs "#E3002B"), so the comparison must be case-insensitive; otherwise the
- * same visual colour is treated as two different themes.
- */
-const edgeMatchesTheme = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    edge: string,
-    targetTheme: Theme
-): boolean => {
-    const targetHex = targetTheme[2].toLowerCase();
-    return getEdgeThemes(graph, edge).some(color => color[2].toLowerCase() === targetHex);
-};
-
-/**
- * BFS from startNode to endNode following only edges matching targetTheme.
- * Returns an interleaved array: [NodeId, LineId, NodeId, LineId, ..., NodeId]
- * or undefined if no path found.
- */
-export const findPathByTheme = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    startNode: NodeId,
-    endNode: NodeId,
-    targetTheme: Theme,
-    maxNodes: number = 200
-): Id[] | undefined => {
-    if (!graph.hasNode(startNode) || !graph.hasNode(endNode)) return undefined;
-    if (startNode === endNode) return [startNode];
-
-    const visited = new Map<NodeId, { parent: NodeId | null; edge: LineId | null }>();
-    visited.set(startNode, { parent: null, edge: null });
-
-    const queue: NodeId[] = [startNode];
-    let found = false;
-
-    while (queue.length > 0 && !found) {
-        const current = queue.shift()!;
-        if (visited.size > maxNodes) break;
-
-        for (const { edge, source, target } of graph.edgeEntries(current)) {
-            if (!edgeMatchesTheme(graph, edge, targetTheme)) continue;
-
-            const neighbor = (source === current ? target : source) as NodeId;
-            if (visited.has(neighbor)) continue;
-
-            visited.set(neighbor, { parent: current, edge: edge as LineId });
-            queue.push(neighbor);
-
-            if (neighbor === endNode) {
-                found = true;
-                break;
-            }
-        }
-    }
-
-    if (!found) return undefined;
-
-    // Reconstruct path: interleaved [NodeId, LineId, NodeId, ...]
-    const path: Id[] = [];
-    let current: NodeId = endNode;
-    while (current !== startNode) {
-        const entry = visited.get(current)!;
-        path.unshift(current);
-        path.unshift(entry.edge!);
-        current = entry.parent!;
-    }
-    path.unshift(startNode);
-
-    return path;
-};
-
-/**
- * Merge newPath into existing timeline with deduplication.
- * Skips nodes and edges that already exist in the timeline.
- * When a node is skipped, its adjacent edge in newPath is also skipped.
- */
-export const deduplicateTimeline = (existing: Id[], newPath: Id[]): Id[] => {
-    const seen = new Set<string>(existing);
-    const result = [...existing];
-    let skipNextEdge = false;
-
-    for (const id of newPath) {
-        const isEdge = id.startsWith('line_');
-
-        if (isEdge) {
-            if (skipNextEdge || seen.has(id)) {
-                skipNextEdge = false;
-                continue;
-            }
-            seen.add(id);
-            result.push(id);
-        } else {
-            // Node: if already seen, skip this node and the following edge
-            if (seen.has(id)) {
-                skipNextEdge = true;
-                continue;
-            }
-            seen.add(id);
-            result.push(id);
-        }
-    }
-
-    return result;
-};
-
-/**
- * Merge new timeline entries into existing timeline with deduplication.
- * Skips nodes and edges that already exist in the timeline.
- * Preserves the reverse property for new edges.
- */
-export const deduplicateTimelineEntries = (existing: TimelineEntry[], newEntries: TimelineEntry[]): TimelineEntry[] => {
-    const existingEdges = new Set<string>(existing.filter(item => item.id.startsWith('line_')).map(item => item.id));
-
-    const result = [...existing];
-
-    for (const entry of newEntries) {
-        const isEdge = entry.id.startsWith('line_');
-
-        if (isEdge) {
-            if (existingEdges.has(entry.id)) continue;
-
-            existingEdges.add(entry.id);
-            result.push(entry);
-        } else {
-            result.push(entry);
-        }
-    }
-
-    return result;
-};
-
-/**
- * Get a display name for a node in the timeline.
- */
-export const getNodeDisplayName = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId
-): string => {
+const getNodePrimaryName = (graph: TimelineGraph, nodeId: NodeId): string => {
     if (!graph.hasNode(nodeId)) return nodeId;
-    if (graph.getNodeAttribute(nodeId, 'type') === 'virtual') return '虚拟节点';
+
     const type = graph.getNodeAttribute(nodeId, 'type');
-    const attr = graph.getNodeAttribute(nodeId, type) as Record<string, any> | undefined;
-    if (attr && Array.isArray(attr.names)) {
-        const validName = attr.names.find(name => typeof name === 'string' && name.trim().length > 0);
-        if (validName) return validName.trim();
+    const attrs = graph.getNodeAttribute(nodeId, type) as Record<string, unknown> | undefined;
+
+    if (Array.isArray(attrs?.names) && typeof attrs.names[0] === 'string' && attrs.names[0].trim()) {
+        return attrs.names[0];
     }
-    return nodeId;
-};
-
-/**
- * Get all nodes (stn_* and misc_node_*) that are NOT in the current timeline.
- */
-export const getUnaddedNodes = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    timeline: TimelineEntry[]
-): NodeId[] => {
-    const normalized = normalizeTimeline(timeline as Array<Id | TimelineEntry>);
-    const timelineNodes = new Set<string>(normalized.map(item => item.id));
-    return graph.filterNodes(
-        node => (node.startsWith('stn_') || node.startsWith('misc_node_')) && !timelineNodes.has(node)
-    ) as NodeId[];
-};
-
-/**
- * Build a NodeVersion object from the current node attributes.
- */
-export const syncCurrentNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId
-): void => {
-    if (!graph.hasNode(nodeId)) return;
-
-    const currentVersion = graph.getNodeAttribute(nodeId, 'currentVersion') ?? 1;
-    const versions = graph.getNodeAttribute(nodeId, 'versions');
-    const currentSnapshot = versions?.find(version => version.version === currentVersion);
-    if (!currentSnapshot) return;
-
-    const attributes = graph.getNodeAttributes(nodeId);
-    const typeAttrs = attributes[attributes.type];
-    const nextSnapshot: NodeVersion = {
-        version: currentVersion,
-        name: currentSnapshot.name,
-        x: attributes.x,
-        y: attributes.y,
-        type: attributes.type,
-        ...(typeAttrs ? { [attributes.type]: structuredClone(typeAttrs) } : {}),
-    } as NodeVersion;
-
-    if (JSON.stringify(currentSnapshot) !== JSON.stringify(nextSnapshot)) {
-        graph.updateNodeAttribute(nodeId, 'versions', versions =>
-            (versions ?? []).map(version => (version.version === currentVersion ? nextSnapshot : version))
-        );
+    if (typeof attrs?.content === 'string' && attrs.content.trim()) {
+        return attrs.content;
     }
+
+    return type;
 };
 
-export const getCurrentNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId
-): NodeVersion | undefined => {
-    if (!graph.hasNode(nodeId)) return undefined;
+export const createTimelineEntry = (refId: Id, phase: TimelinePhase = 'enter'): TimelineElementEntry => {
+    return isNodeTimelineEntry(refId)
+        ? { id: `timeline_${nanoid(10)}`, kind: 'node', refId, phase, showAnimation: true }
+        : { id: `timeline_${nanoid(10)}`, kind: 'edge', refId, phase, showAnimation: true };
+};
 
-    const attr = graph.getNodeAttributes(nodeId);
-    const type = attr.type;
-    const typeAttrs = attr[type];
+export const insertTimelineLabel = (doc: TimelineDocument, text: string, index: number): TimelineDocument => {
+    const startSlot = Math.max(0, Math.min(index, doc.track.length - 1));
+    return {
+        ...doc,
+        labelTrack: [
+            ...(doc.labelTrack ?? []),
+            {
+                id: `timeline_${nanoid(10)}`,
+                kind: 'label',
+                text,
+                startSlot,
+                endSlot: startSlot + 1,
+                duration: TIMELINE_LABEL_DEFAULT_SECONDS,
+            },
+        ],
+    };
+};
+
+export const insertTimelineExitEntry = (
+    doc: TimelineDocument,
+    refId: Id,
+    index: number
+): { document: TimelineDocument; cursor: number } => {
+    const enterIndex = doc.track.findIndex(
+        entry => isElementEntry(entry) && entry.refId === refId && entry.phase === 'enter'
+    );
+    if (
+        enterIndex === -1 ||
+        doc.track.some(entry => isElementEntry(entry) && entry.refId === refId && entry.phase === 'exit')
+    ) {
+        return { document: doc, cursor: index };
+    }
+
+    const insertionIndex = Math.max(0, Math.min(index, doc.track.length));
+    const lastKeyframeIndex = doc.track.findLastIndex(entry => entry.kind === 'keyframe' && entry.refId === refId);
+    const targetIndex = Math.max(insertionIndex, enterIndex + 1, lastKeyframeIndex + 1);
+    const track = [...doc.track];
+    track.splice(targetIndex, 0, createTimelineEntry(refId, 'exit'));
 
     return {
-        version: 1,
-        name: 'basic',
-        x: attr.x,
-        y: attr.y,
-        type,
-        ...(typeAttrs ? { [type]: structuredClone(typeAttrs) } : {}),
-    } as NodeVersion;
+        document: { ...doc, track },
+        cursor: targetIndex + 1,
+    };
 };
 
+export const createKeyframeEntry = (
+    graph: TimelineGraph,
+    refId: NodeId,
+    position?: { x: number; y: number }
+): TimelineKeyframeEntry => {
+    const x = position?.x ?? (graph.hasNode(refId) ? graph.getNodeAttribute(refId, 'x') : 0);
+    const y = position?.y ?? (graph.hasNode(refId) ? graph.getNodeAttribute(refId, 'y') : 0);
+    return { id: `timeline_${nanoid(10)}`, kind: 'keyframe', refId, x, y };
+};
+
+export const createPauseEntry = (position: TimelinePausePosition, duration = 1): TimelinePauseEntry => ({
+    id: `timeline_${nanoid(10)}`,
+    kind: 'pause',
+    position,
+    duration,
+});
+
+export const insertTimelinePause = (
+    doc: TimelineDocument,
+    position: TimelinePausePosition,
+    index: number
+): { document: TimelineDocument; cursor: number } => {
+    const insertionIndex = Math.max(0, Math.min(index, doc.track.length));
+    const track = [...doc.track];
+    track.splice(insertionIndex, 0, createPauseEntry(position));
+    return { document: { ...doc, track }, cursor: insertionIndex + 1 };
+};
+
+export const updateKeyframePosition = (
+    doc: TimelineDocument,
+    entryId: string,
+    x: number,
+    y: number
+): TimelineDocument => ({
+    ...doc,
+    track: doc.track.map(entry => (entry.id === entryId && entry.kind === 'keyframe' ? { ...entry, x, y } : entry)),
+});
+
 /**
- * Get a specific historical version of a node.
- * Returns undefined if the node or version does not exist.
- * Every version, including basic (version 1), is looked up in the stored versions array.
+ * Insert a keyframe for `refId` at the given cursor index.
+ * A station must enter the frame before it can be keyframed, so the enter entry
+ * is added first when it is missing from the track.
  */
-export const getNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    version: number
-): NodeVersion | undefined => {
-    if (!graph.hasNode(nodeId)) return undefined;
-    if (version <= 0) return undefined;
+export const insertKeyframeEntry = (
+    doc: TimelineDocument,
+    graph: TimelineGraph,
+    refId: NodeId,
+    index: number
+): { document: TimelineDocument; cursor: number } => {
+    const insertionIndex = Math.max(0, Math.min(index, doc.track.length));
+    const track = [...doc.track];
+    let cursor = insertionIndex;
 
-    // Before reading any target version, persist edits made while another version was active.
-    // This keeps direct graph edits and Redux save paths consistent without requiring every editor
-    // to know about the version snapshot mechanism.
-    syncCurrentNodeVersion(graph, nodeId);
+    const enterIndex = track.findIndex(
+        entry => isElementEntry(entry) && entry.refId === refId && entry.phase === 'enter'
+    );
+    if (enterIndex === -1) {
+        track.splice(cursor, 0, createTimelineEntry(refId));
+        cursor += 1;
+    } else {
+        cursor = Math.max(cursor, enterIndex + 1);
+    }
+    const exitIndex = track.findIndex(
+        entry => isElementEntry(entry) && entry.refId === refId && entry.phase === 'exit'
+    );
+    if (exitIndex !== -1) cursor = Math.min(cursor, exitIndex);
+    track.splice(cursor, 0, createKeyframeEntry(graph, refId));
 
-    const versions = graph.getNodeAttribute(nodeId, 'versions');
-    const stored = versions?.find(v => v.version === version);
-    if (stored) {
-        // Return a deep clone so callers cannot mutate stored version data.
-        return structuredClone(stored);
+    return { document: { ...doc, track }, cursor };
+};
+
+export const insertTimelineEntry = (doc: TimelineDocument, refId: Id, index: number): TimelineDocument => {
+    if (doc.track.some(entry => isElementEntry(entry) && entry.refId === refId)) return doc;
+
+    const insertionIndex = Math.max(0, Math.min(index, doc.track.length));
+    const track = [...doc.track];
+    track.splice(insertionIndex, 0, createTimelineEntry(refId));
+
+    return {
+        ...doc,
+        track,
+    };
+};
+
+export const appendTimelineEntry = (doc: TimelineDocument, refId: Id): TimelineDocument => {
+    return insertTimelineEntry(doc, refId, doc.track.length);
+};
+
+export const removeTimelineEntry = (doc: TimelineDocument, entryId: string): TimelineDocument => {
+    const removedEntry = doc.track.find(entry => entry.id === entryId);
+    if (!removedEntry) return doc;
+
+    // Exit phases and keyframes depend on the enter card and are removed in the same undoable edit.
+    const removeDependents = isElementEntry(removedEntry) && removedEntry.phase === 'enter';
+    return {
+        ...doc,
+        track: doc.track.filter(entry =>
+            removeDependents ? isPauseEntry(entry) || entry.refId !== removedEntry.refId : entry.id !== entryId
+        ),
+    };
+};
+
+export const moveTimelineEntry = (doc: TimelineDocument, fromIndex: number, toIndex: number): TimelineDocument => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return doc;
+    if (fromIndex >= doc.track.length || toIndex >= doc.track.length) return doc;
+
+    const track = [...doc.track];
+    const [entry] = track.splice(fromIndex, 1);
+    track.splice(toIndex, 0, entry);
+    if (isPauseEntry(entry)) return { ...doc, track };
+
+    let visible = false;
+    for (const candidate of track) {
+        if (isPauseEntry(candidate)) continue;
+        if (candidate.refId !== entry.refId) continue;
+        if (isElementEntry(candidate) && candidate.phase === 'enter') visible = true;
+        else {
+            if (!visible) return doc;
+            if (isElementEntry(candidate)) visible = false;
+        }
+    }
+
+    return {
+        ...doc,
+        track,
+    };
+};
+
+interface RawTimelineEntry {
+    id?: unknown;
+    kind?: unknown;
+    refId?: unknown;
+    phase?: unknown;
+    showAnimation?: unknown;
+    x?: unknown;
+    y?: unknown;
+    position?: unknown;
+    duration?: unknown;
+}
+
+const normalizeTimelineEntry = (entry?: RawTimelineEntry): TimelineEntry | undefined => {
+    if (!entry || typeof entry.id !== 'string') return undefined;
+
+    if (entry.kind === 'pause') {
+        const position = entry.position === 'after' ? 'after' : entry.position === 'before' ? 'before' : undefined;
+        if (!position || typeof entry.duration !== 'number' || !Number.isFinite(entry.duration)) return undefined;
+        return {
+            id: entry.id,
+            kind: 'pause',
+            position,
+            duration: Math.max(0, entry.duration),
+        };
+    }
+
+    if (typeof entry.refId !== 'string') return undefined;
+
+    if (entry.kind === 'keyframe') {
+        if (typeof entry.x !== 'number' || !Number.isFinite(entry.x)) return undefined;
+        if (typeof entry.y !== 'number' || !Number.isFinite(entry.y)) return undefined;
+        return { id: entry.id, kind: 'keyframe', refId: entry.refId as NodeId, x: entry.x, y: entry.y };
+    }
+
+    if (entry.kind === 'node' || entry.kind === 'edge') {
+        const phase = entry.phase === 'exit' ? ('exit' as const) : ('enter' as const);
+        const showAnimation = entry.showAnimation !== false;
+        return entry.kind === 'node'
+            ? { id: entry.id, kind: 'node', refId: entry.refId as NodeId, phase, showAnimation }
+            : { id: entry.id, kind: 'edge', refId: entry.refId as LineId, phase, showAnimation };
     }
 
     return undefined;
 };
 
-/**
- * Apply a historical version to a node, replacing its current x, y, type and type-specific attributes.
- */
-export const applyNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    version: NodeVersion
-): void => {
-    if (!graph.hasNode(nodeId)) return;
+export type TimelineDocumentLike = Partial<Omit<TimelineDocument, 'track'>> & { track?: unknown };
 
-    const currentType = graph.getNodeAttribute(nodeId, 'type');
-    const newType = version.type;
+export const normalizeTimelineDocument = (doc?: TimelineDocumentLike | null): TimelineDocument => {
+    if (!doc || !Array.isArray(doc.track)) return createEmptyTimelineDocument();
 
-    // Remove current type-specific attributes if type changes
-    if (currentType !== newType) {
-        graph.removeNodeAttribute(nodeId, currentType);
-    }
-
-    // Build the updates object dynamically to satisfy TypeScript's index signature.
-    const updates: Record<string, unknown> = {
-        x: version.x,
-        y: version.y,
-        type: newType,
-        currentVersion: version.version,
+    const normalized: TimelineDocument = {
+        version: 1,
+        track: (doc.track as RawTimelineEntry[])
+            .map(entry => normalizeTimelineEntry(entry))
+            .filter((entry): entry is TimelineEntry => !!entry),
     };
-
-    // Add type-specific attributes
-    const typeAttrs = (version as unknown as Record<string, unknown>)[newType];
-    if (typeAttrs) {
-        updates[newType] = structuredClone(typeAttrs);
+    if (doc.settings && typeof doc.settings === 'object') {
+        const settings = doc.settings as Partial<TimelineSettings>;
+        normalized.settings = {
+            cameraZoom: isTimelineCameraZoom(settings.cameraZoom)
+                ? settings.cameraZoom
+                : DEFAULT_TIMELINE_SETTINGS.cameraZoom,
+            speedMultiplier:
+                typeof settings.speedMultiplier === 'number' && Number.isFinite(settings.speedMultiplier)
+                    ? Math.max(0.5, Math.min(2, settings.speedMultiplier))
+                    : DEFAULT_TIMELINE_SETTINGS.speedMultiplier,
+            autoChangeStationType:
+                typeof settings.autoChangeStationType === 'boolean'
+                    ? settings.autoChangeStationType
+                    : DEFAULT_TIMELINE_SETTINGS.autoChangeStationType,
+            showYear: settings.showYear === true,
+            showLineName: settings.showLineName === true,
+            showLineLength: settings.showLineLength === true,
+            lineLengthUnit: settings.lineLengthUnit === 'mi' ? 'mi' : 'km',
+        };
     }
-
-    graph.mergeNodeAttributes(nodeId, updates as Partial<NodeAttributes>);
+    const audioTrack = (doc as { audioTrack?: unknown }).audioTrack;
+    if (Array.isArray(audioTrack)) {
+        normalized.audioTrack = audioTrack
+            .filter((entry): entry is TimelineAudioEntry => {
+                if (!entry || typeof entry !== 'object') return false;
+                const candidate = entry as Partial<TimelineAudioEntry>;
+                return (
+                    candidate.kind === 'audio' &&
+                    typeof candidate.id === 'string' &&
+                    typeof candidate.blobId === 'string' &&
+                    typeof candidate.name === 'string' &&
+                    typeof candidate.startSlot === 'number' &&
+                    Number.isFinite(candidate.startSlot) &&
+                    typeof candidate.endSlot === 'number' &&
+                    Number.isFinite(candidate.endSlot) &&
+                    candidate.startSlot >= 0 &&
+                    candidate.endSlot >= candidate.startSlot
+                );
+            })
+            .map(entry => {
+                const normalizedEntry = {
+                    ...entry,
+                    startSlot: Math.round(entry.startSlot),
+                    endSlot: Math.round(entry.endSlot),
+                };
+                if (typeof entry.startTime !== 'number' || !Number.isFinite(entry.startTime) || entry.startTime < 0) {
+                    delete normalizedEntry.startTime;
+                }
+                if (typeof entry.endTime !== 'number' || !Number.isFinite(entry.endTime) || entry.endTime < 0) {
+                    delete normalizedEntry.endTime;
+                } else if (normalizedEntry.startTime !== undefined) {
+                    normalizedEntry.endTime = Math.max(normalizedEntry.startTime, entry.endTime);
+                }
+                return normalizedEntry;
+            });
+    }
+    const labelTrack = (doc as { labelTrack?: unknown }).labelTrack;
+    if (Array.isArray(labelTrack)) {
+        normalized.labelTrack = labelTrack
+            .filter((entry): entry is TimelineLabelEntry => {
+                if (!entry || typeof entry !== 'object') return false;
+                const candidate = entry as Partial<TimelineLabelEntry>;
+                return (
+                    candidate.kind === 'label' &&
+                    typeof candidate.id === 'string' &&
+                    typeof candidate.text === 'string' &&
+                    typeof candidate.startSlot === 'number' &&
+                    Number.isFinite(candidate.startSlot) &&
+                    candidate.startSlot >= 0 &&
+                    typeof candidate.endSlot === 'number' &&
+                    Number.isFinite(candidate.endSlot) &&
+                    candidate.endSlot >= candidate.startSlot
+                );
+            })
+            .map(entry => {
+                const clip: TimelineLabelEntry = {
+                    id: entry.id,
+                    kind: 'label',
+                    text: entry.text,
+                    startSlot: Math.round(entry.startSlot),
+                    endSlot: Math.round(entry.endSlot),
+                };
+                if (typeof entry.startTime === 'number' && Number.isFinite(entry.startTime) && entry.startTime >= 0)
+                    clip.startTime = entry.startTime;
+                if (typeof entry.duration === 'number' && Number.isFinite(entry.duration) && entry.duration > 0)
+                    clip.duration = entry.duration;
+                if (typeof entry.endTime === 'number' && Number.isFinite(entry.endTime) && entry.endTime >= 0)
+                    clip.endTime = Math.max(clip.startTime ?? 0, entry.endTime);
+                return clip;
+            });
+    }
+    return normalized;
 };
 
-/**
- * Add a new historical version to a node.
- * The new version is assigned the next available version number and copies the current node attributes.
- *
- * If `originalSnapshot` is provided (typically captured before user edits) and no v1 snapshot is
- * yet stored in the `versions` array, it will be persisted first as version=1 (name="basic"), so
- * that v1 continues to refer to the *original* node state even after later versions are applied.
- *
- * Returns the new version number, or undefined if the node does not exist.
- */
-export const addNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    originalSnapshot?: NodeVersion
-): number | undefined => {
-    if (!graph.hasNode(nodeId)) return undefined;
+export const getTimelineCoverage = (graph: TimelineGraph, doc: TimelineDocument): TimelineCoverage => {
+    const addedRefs = new Set<Id>(doc.track.filter(isElementEntry).map(entry => entry.refId));
+    const missingNodeIds = graph.nodes().filter(node => !addedRefs.has(node as NodeId)) as NodeId[];
+    const missingEdgeIds = graph.edges().filter(edge => !addedRefs.has(edge as LineId)) as LineId[];
+    const missingIds = [...missingNodeIds, ...missingEdgeIds];
 
-    const versions = graph.getNodeAttribute(nodeId, 'versions') ?? [];
-
-    // basic 与其他版本一样，始终以 versions 中的 v1 快照为准。
-    const newVersions: NodeVersion[] = [...versions];
-    if (!newVersions.some(v => v.version === 1)) {
-        const basicSnapshot = originalSnapshot ?? getCurrentNodeVersion(graph, nodeId);
-        if (!basicSnapshot) return undefined;
-        newVersions.push({
-            ...structuredClone(basicSnapshot),
-            version: 1,
-            name: 'basic',
-        });
-    }
-
-    const maxVersion = newVersions.reduce((max, v) => Math.max(max, v.version), 1);
-    const newVersionNumber = maxVersion + 1;
-
-    const currentAttrs = getCurrentNodeVersion(graph, nodeId);
-    if (!currentAttrs) return undefined;
-
-    const newVersion: NodeVersion = {
-        ...currentAttrs,
-        version: newVersionNumber,
-        name: `v${newVersionNumber}`,
+    return {
+        missingNodeIds,
+        missingEdgeIds,
+        missingIds,
+        missingNodeCount: missingNodeIds.length,
+        missingEdgeCount: missingEdgeIds.length,
+        isComplete: missingIds.length === 0,
     };
-
-    newVersions.push(newVersion);
-    graph.mergeNodeAttributes(nodeId, { versions: newVersions });
-    return newVersionNumber;
 };
 
-/**
- * Update a specific historical version of a node.
- * Does not affect the current node attributes.
- */
-export const updateNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    version: NodeVersion
-): boolean => {
-    if (!graph.hasNode(nodeId)) return false;
-
-    const versions = graph.getNodeAttribute(nodeId, 'versions') ?? [];
-    const index = versions.findIndex(v => v.version === version.version);
-    if (index === -1) return false;
-
-    const newVersions = [...versions];
-    newVersions[index] = version;
-    graph.mergeNodeAttributes(nodeId, { versions: newVersions });
-    return true;
-};
-
-/**
- * Remove a historical version from a node.
- * Version 1 (basic) can be removed when there are stored versions — the first stored version's
- * state replaces the current node state, and that stored version is removed from history.
- * Returns false if the node does not exist or if version 1 is the only remaining version.
- */
-export const removeNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    version: number
-): boolean => {
-    if (!graph.hasNode(nodeId)) return false;
-
-    if (version <= 1) {
-        // Removing v1 (basic): apply the first stored version's state, then remove it
-        const storedVersions = graph.getNodeAttribute(nodeId, 'versions') ?? [];
-        if (storedVersions.length === 0) return false;
-
-        // Find the first stored version (lowest version number)
-        const sortedVersions = [...storedVersions].sort((a, b) => a.version - b.version);
-        const firstVersion = sortedVersions[0];
-
-        // Apply the first stored version's state to the current node
-        applyNodeVersion(graph, nodeId, firstVersion);
-
-        // Remove that version from stored versions and reset currentVersion to 1
-        const newVersions = storedVersions.filter(v => v.version !== firstVersion.version);
-        graph.mergeNodeAttributes(nodeId, {
-            versions: newVersions,
-            currentVersion: 1,
-        });
-        return true;
+export const getTimelineEntryTitle = (graph: TimelineGraph, entry: TimelineEntry): string => {
+    if (entry.kind === 'pause') return entry.position === 'before' ? 'Frame pause before' : 'Frame pause after';
+    if (entry.kind === 'keyframe') {
+        return graph.hasNode(entry.refId) ? getNodePrimaryName(graph, entry.refId) : entry.refId;
     }
 
-    const versions = graph.getNodeAttribute(nodeId, 'versions') ?? [];
-    const newVersions = versions.filter(v => v.version !== version);
-    if (newVersions.length === versions.length) return false;
-
-    graph.mergeNodeAttributes(nodeId, { versions: newVersions });
-    return true;
-};
-
-/**
- * Rename a historical version of a node.
- */
-export const renameNodeVersion = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    nodeId: NodeId,
-    version: number,
-    newName: string
-): boolean => {
-    if (!graph.hasNode(nodeId)) return false;
-    if (version <= 1) {
-        // For v1, update directly since it's stored in current attributes
-        return false;
+    if (entry.kind === 'node') {
+        return getNodePrimaryName(graph, entry.refId);
     }
 
-    const versions = graph.getNodeAttribute(nodeId, 'versions') ?? [];
-    const index = versions.findIndex(v => v.version === version);
-    if (index === -1) return false;
+    if (!graph.hasEdge(entry.refId)) return entry.refId;
 
-    const newVersions = [...versions];
-    newVersions[index] = { ...newVersions[index], name: newName };
-    graph.mergeNodeAttributes(nodeId, { versions: newVersions });
-    return true;
+    const [source, target] = graph.extremities(entry.refId) as [NodeId, NodeId];
+    return `${getNodePrimaryName(graph, source)} -> ${getNodePrimaryName(graph, target)}`;
 };
 
-/**
- * Get the actual direction of an edge's path geometry.
- * Returns the tuple [fromNode, toNode] representing the natural drawing direction.
- *
- * All line path generators (diagonal / perpendicular / ro-perp / ray-guided / simple)
- * always emit a path starting from the graph source and ending at the graph target;
- * the `startFrom` / `startAngle` attributes only change the path SHAPE (which side the
- * corner/offset is on), not the path's start point. Therefore the natural drawing
- * direction is always source -> target, regardless of startFrom.
- */
-export const getLineDirection = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    edgeId: LineId
-): [NodeId, NodeId] | undefined => {
+export const getTimelineEntrySubtitle = (graph: TimelineGraph, entry: TimelineEntry): string => {
+    if (entry.kind === 'pause') return `${entry.duration}s`;
+    if (entry.kind === 'keyframe') {
+        return `${Math.round(entry.x * 100) / 100}, ${Math.round(entry.y * 100) / 100}`;
+    }
+
+    if (entry.kind === 'node') {
+        if (!graph.hasNode(entry.refId)) return 'Missing node';
+        return graph.getNodeAttribute(entry.refId, 'type');
+    }
+
+    if (!graph.hasEdge(entry.refId)) return 'Missing edge';
+    const attrs = graph.getEdgeAttributes(entry.refId);
+    return `${attrs.style} / ${attrs.type}`;
+};
+
+export const getTimelineEntryAccent = (graph: TimelineGraph, entry: TimelineEntry): string[] => {
+    if (entry.kind === 'pause') return ['#805AD5'];
+    if (entry.kind === 'keyframe') return ['#805AD5'];
+    if (entry.kind === 'node' && entry.refId.startsWith('stn_')) return ['#c3e1f3'];
+    if (entry.kind === 'node' && entry.refId.startsWith('misc_')) return ['#f3c3e1'];
+    if (!graph.hasEdge(entry.refId)) return ['#718096'];
+
+    const attrs = graph.getEdgeAttributes(entry.refId) as Record<string, any>;
+    const styleAttrs = attrs[attrs.style] || {};
+
+    if (attrs.style === 'dual-color' || attrs.style === 'mrt-tape-out') {
+        const colorA = styleAttrs?.colorA?.[2] ?? '#000000';
+        const colorB = styleAttrs?.colorB?.[2] ?? '#000000';
+        return [colorA, colorB];
+    }
+
+    if (attrs.style === 'london-rail') {
+        const colorBackground = styleAttrs?.colorBackground?.[2] ?? '#000000';
+        const colorForeground = styleAttrs?.colorForeground?.[2] ?? '#000000';
+        return [colorBackground, colorForeground];
+    }
+
+    if (attrs.style === 'generic') {
+        const layers = styleAttrs?.layers;
+        if (Array.isArray(layers) && layers.length > 0) {
+            return layers.map((layer: any) => layer?.color?.[2] ?? '#000000');
+        }
+        return ['#000000'];
+    }
+
+    return [styleAttrs?.color?.[2] ?? styleAttrs?.colorA?.[2] ?? styleAttrs?.layers?.[0]?.color?.[2] ?? '#4A5568'];
+};
+
+export const getTimelineElementCenter = (graph: TimelineGraph, id: Id): { x: number; y: number } | undefined => {
+    if (isNodeTimelineEntry(id)) {
+        if (!graph.hasNode(id)) return undefined;
+        return {
+            x: graph.getNodeAttribute(id, 'x'),
+            y: graph.getNodeAttribute(id, 'y'),
+        };
+    }
+
+    if (!graph.hasEdge(id)) return undefined;
+
+    const [source, target] = graph.extremities(id) as [NodeId, NodeId];
+    return {
+        x: (graph.getNodeAttribute(source, 'x') + graph.getNodeAttribute(target, 'x')) / 2,
+        y: (graph.getNodeAttribute(source, 'y') + graph.getNodeAttribute(target, 'y')) / 2,
+    };
+};
+
+export const getEdgeTheme = (graph: TimelineGraph, edgeId: LineId): Theme | undefined => {
     if (!graph.hasEdge(edgeId)) return undefined;
-
-    const [source, target] = graph.extremities(edgeId);
-    return [source as NodeId, target as NodeId];
+    const attrs = graph.getEdgeAttributes(edgeId) as Record<string, any>;
+    const styleAttrs = attrs[attrs.style];
+    return styleAttrs?.color ?? styleAttrs?.colorA ?? styleAttrs?.layers?.[0]?.color;
 };
 
-/**
- * Calculate auto-reverse settings for a path.
- * The path is an interleaved array: [NodeId, LineId, NodeId, LineId, ..., NodeId]
- * For each edge in the path, determines if it needs to be reversed to match the path direction.
- *
- * @param graph - The graph instance
- * @param path - Interleaved array of node and edge IDs
- * @returns Array of TimelineEntry with auto-calculated reverse properties
- */
-export const calculateAutoReverseForPath = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    path: Id[]
-): TimelineEntry[] => {
-    const result: TimelineEntry[] = [];
+export const getEdgeColorString = (theme: Theme | undefined): string => {
+    return theme ? theme[2] : '#000000';
+};
 
-    for (let i = 0; i < path.length; i++) {
-        const id = path[i];
+const themeToStr = (t: Theme | undefined) => {
+    const tDef = t ?? [CityCode.Other, 'other', '#000000', 'black'];
+    return tDef[0] === CityCode.Other && tDef[1] === 'other'
+        ? `${tDef[0]}-${tDef[1]}-${tDef[2]}-${tDef[3]}`
+        : `${tDef[0]}-${tDef[1]}`;
+};
 
-        // Nodes are always added as-is (no reverse property)
-        if (!id.startsWith('line_')) {
-            result.push({ id });
-            continue;
-        }
+export const getEdgeThemeString = (graph: TimelineGraph, edgeId: LineId): string => {
+    if (!graph.hasEdge(edgeId)) return 'unknown';
 
-        // For edges, calculate if reverse is needed
-        const edgeId = id as LineId;
-        const prevNode = path[i - 1] as NodeId; // Previous node in path
-        const nextNode = path[i + 1] as NodeId; // Next node in path
+    const attrs = graph.getEdgeAttributes(edgeId) as Record<string, any>;
+    const styleAttrs = attrs[attrs.style] || {};
 
-        // Get the actual direction of this edge based on startFrom
-        const lineDirection = getLineDirection(graph, edgeId);
-
-        if (!lineDirection) {
-            // Edge not found, add without reverse
-            result.push({ id: edgeId });
-            continue;
-        }
-
-        const [lineFrom, lineTo] = lineDirection;
-
-        // The desired path direction is: prevNode -> nextNode
-        // Check if the line's actual direction matches the path direction
-        // Line direction matches if: lineFrom === prevNode AND lineTo === nextNode
-        // Line direction is opposite if: lineFrom === nextNode AND lineTo === prevNode
-        // If neither (shouldn't happen in valid paths), default to no reverse
-
-        const matchesPathDirection = lineFrom === prevNode && lineTo === nextNode;
-        const oppositeToPathDirection = lineFrom === nextNode && lineTo === prevNode;
-
-        if (matchesPathDirection) {
-            // Line direction matches path direction, no reverse needed
-            result.push({ id: edgeId, reverse: false });
-        } else if (oppositeToPathDirection) {
-            // Line direction is opposite to path direction, reverse needed
-            result.push({ id: edgeId, reverse: true });
-        } else {
-            // Edge doesn't connect these nodes as expected (shouldn't happen in valid paths)
-            result.push({ id: edgeId });
-        }
+    if (attrs.style === 'dual-color' || attrs.style === 'mrt-tape-out') {
+        const strA = themeToStr(styleAttrs?.colorA);
+        const strB = themeToStr(styleAttrs?.colorB);
+        return [strA, strB].sort().join('::');
     }
 
-    return result;
+    if (attrs.style === 'london-rail') {
+        const strBg = themeToStr(styleAttrs?.colorBackground);
+        const strFg = themeToStr(styleAttrs?.colorForeground);
+        return [strBg, strFg].join('::');
+    }
+
+    if (attrs.style === 'generic') {
+        const layers = styleAttrs?.layers;
+        if (Array.isArray(layers) && layers.length > 0) {
+            return layers.map((layer: any) => themeToStr(layer?.color)).join('::');
+        }
+        return themeToStr(undefined);
+    }
+
+    const theme = getEdgeTheme(graph, edgeId);
+    return themeToStr(theme);
 };
 
-export interface ActionConstraintState {
-    /** 是否允许在插入位置添加聚焦动作 */
-    canAddFocus: boolean;
-    /** 是否允许在插入位置添加全览动作 */
-    canAddOverview: boolean;
+export const getAdjacentLineColors = (graph: TimelineGraph, nodeId: NodeId) => {
+    if (!graph.hasNode(nodeId)) return [];
+    const lines = new Map<string, { themeStr: string; color: string[]; label: string }>(); // themeStr -> info
+    graph.forEachEdge(nodeId, edge => {
+        const edgeId = edge as LineId;
+        const theme = getEdgeTheme(graph, edgeId);
+        const themeStr = getEdgeThemeString(graph, edgeId);
+        if (!lines.has(themeStr)) {
+            const label = theme && theme[1] !== 'other' ? theme[1] : '';
+            lines.set(themeStr, {
+                themeStr,
+                color: getTimelineEntryAccent(graph, {
+                    kind: 'edge',
+                    refId: edgeId,
+                    id: '',
+                    phase: 'enter',
+                    showAnimation: true,
+                }),
+                label,
+            });
+        }
+    });
+    return Array.from(lines.values());
+};
+
+export interface TimelinePreviewState {
+    visibleIds: Set<Id>;
+    /**
+     * Interpolated positions of keyframed nodes at the cursor, overriding the graph position.
+     */
+    positions: Map<NodeId, { x: number; y: number }>;
 }
 
+interface TimelineKeyframeAt extends TimelineKeyframeEntry {
+    index: number;
+}
+
+const interpolateKeyframes = (
+    frames: TimelineKeyframeAt[],
+    cursor: number,
+    origin: { x: number; y: number }
+): { x: number; y: number } => {
+    let before: TimelineKeyframeAt | undefined;
+    let after: TimelineKeyframeAt | undefined;
+    for (const frame of frames) {
+        if (frame.index <= cursor) before = frame;
+        else {
+            after = frame;
+            break;
+        }
+    }
+
+    if (before && after) {
+        const t = (cursor - before.index) / (after.index - before.index);
+        return { x: before.x + (after.x - before.x) * t, y: before.y + (after.y - before.y) * t };
+    }
+    if (before) return { x: before.x, y: before.y };
+    return origin;
+};
+
 /**
- * 聚焦 / 全览互斥约束状态计算（纯函数，便于测试与复用）。
- *
- * 判定依据：插入位置（insertionIndex）之前的动作序列。
- * - 无全览：       可以添加全览；不可以添加聚焦（聚焦必须紧跟在全览之后使用）。
- * - 有全览且最近一次全览之后已有聚焦：可以添加全览；不可以再添加聚焦。
- * - 有全览且最近一次全览之后没有聚焦：可以添加聚焦；不可以再添加全览。
- *
- * 约束（需求 2c）：
- *   1. 前面没有全览 或 最近全览之后已有聚焦 → 禁止添加聚焦；
- *   2. 前面有全览 且 最近全览之后没有聚焦 → 禁止添加全览。
- * 注意：最近一次全览的索引必须用"正向扫描记录最后一个全览下标"的方式计算，
- * 不能写成 rowsBeforeInsertion.map(...).at(-1) —— 那会取到"最后一个元素是否为全览"
- * 的映射值，当列表以非全览动作结尾时会被误判为 -1，从而把"有全览"错判成"无全览"。
+ * Compute the canvas state at the timeline cursor.
+ * The cursor represents the insertion position before the next track entry.
+ * Elements are visible after their enter card and through their exit card, inclusive.
+ * They disappear only when the cursor moves past the exit card.
+ * Keyframed nodes get their position interpolated between the surrounding keyframes.
  */
-export const getActionConstraintState = (rows: ActionRow[], insertionIndex: number): ActionConstraintState => {
-    const rowsBeforeInsertion = rows.slice(0, insertionIndex);
-    let previousOverviewIndex = -1;
-    rowsBeforeInsertion.forEach((row, index) => {
-        if (row.actionType === 'overview') previousOverviewIndex = index;
+export const getTimelinePreviewState = (
+    graph: TimelineGraph,
+    doc: TimelineDocument,
+    cursor: number
+): TimelinePreviewState => {
+    const visibleIds = new Set<Id>();
+    const keyframesByRef = new Map<NodeId, TimelineKeyframeAt[]>();
+
+    doc.track.forEach((entry, index) => {
+        if (entry.kind === 'keyframe') {
+            const frames = keyframesByRef.get(entry.refId) ?? [];
+            frames.push({ ...entry, index });
+            keyframesByRef.set(entry.refId, frames);
+            return;
+        }
+
+        if (index < cursor && isElementEntry(entry)) {
+            if (entry.phase === 'enter') visibleIds.add(entry.refId);
+            else visibleIds.delete(entry.refId);
+        }
     });
-    const hasPreviousOverview = previousOverviewIndex >= 0;
-    const hasFocusAfterPreviousOverview =
-        hasPreviousOverview &&
-        rowsBeforeInsertion.slice(previousOverviewIndex + 1).some(row => row.actionType === 'focus');
+
+    const positions = new Map<NodeId, { x: number; y: number }>();
+    keyframesByRef.forEach((frames, refId) => {
+        if (!graph.hasNode(refId)) return;
+        const origin = { x: graph.getNodeAttribute(refId, 'x'), y: graph.getNodeAttribute(refId, 'y') };
+        positions.set(refId, interpolateKeyframes(frames, cursor - 1, origin));
+    });
+
+    return { visibleIds, positions };
+};
+
+export const findShortestPathByLine = (
+    graph: TimelineGraph,
+    startNode: NodeId,
+    endNode: NodeId,
+    themeStr: string
+): Id[] | null => {
+    const queue: { current: NodeId; path: Id[] }[] = [{ current: startNode, path: [startNode] }];
+    const visited = new Set<NodeId>([startNode]);
+
+    while (queue.length > 0) {
+        const { current, path } = queue.shift()!;
+        if (current === endNode) {
+            return path;
+        }
+
+        graph.forEachEdge(current, (edge, attr, source, target) => {
+            const edgeThemeStr = getEdgeThemeString(graph, edge as LineId);
+            if (edgeThemeStr !== themeStr) return;
+
+            const neighbor = (source === current ? target : source) as NodeId;
+            if (!visited.has(neighbor)) {
+                visited.add(neighbor);
+                queue.push({
+                    current: neighbor,
+                    path: [...path, edge as LineId, neighbor],
+                });
+            }
+        });
+    }
+
+    return null;
+};
+
+export const insertTimelineEntries = (doc: TimelineDocument, refIds: Id[], index: number): TimelineDocument => {
+    const existingRefs = new Set<Id>(doc.track.filter(isElementEntry).map(entry => entry.refId));
+    const entries = refIds
+        .filter(refId => {
+            if (existingRefs.has(refId)) return false;
+            existingRefs.add(refId);
+            return true;
+        })
+        .map(refId => createTimelineEntry(refId));
+
+    if (entries.length === 0) return doc;
+
+    const insertionIndex = Math.max(0, Math.min(index, doc.track.length));
+    const track = [...doc.track];
+    track.splice(insertionIndex, 0, ...entries);
+
     return {
-        canAddFocus: hasPreviousOverview && !hasFocusAfterPreviousOverview,
-        canAddOverview: !hasPreviousOverview || hasFocusAfterPreviousOverview,
+        ...doc,
+        track,
     };
+};
+
+export const appendTimelineEntries = (doc: TimelineDocument, refIds: Id[]): TimelineDocument => {
+    return insertTimelineEntries(doc, refIds, doc.track.length);
 };

@@ -1,14 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { MultiDirectedGraph } from 'graphology';
-import { EdgeAttributes, GraphAttributes, NodeAttributes } from '../constants/constants';
+import { MonoColour } from '@railmapgen/rmg-palette-resources';
+import stations from '../components/svgs/stations/stations';
+import { CityCode, EdgeAttributes, GraphAttributes, NodeAttributes, Theme } from '../constants/constants';
 import { StationType } from '../constants/stations';
-import { ActionRow, TimelineLine } from '../constants/timeline';
 import {
-    buildFallbackSequence,
-    buildAnimationPhases,
-    getActionLineMinimumDuration,
-    getActionLineSuggestedDuration,
+    createEmptyTimelineDocument,
+    TimelineDocument,
+    TimelineElementEntry,
+    TimelineEntry,
+} from '../constants/timeline';
+import {
+    createFrameStationGraph,
+    embedVideoExportStyles,
+    generateAnimationSequence,
+    getNodeRevealProgressForFrame,
+    getOverviewZoomProgress,
+    getPlaybackSegmentDurations,
+    getRenderedEdgeLength,
+    getStationActivationProgress,
+    getVideoWatermarkLayout,
+    interpolateCameraZoom,
+    renderVideoFrameGeometry,
 } from './video-export';
+import { createVideoFrameScene } from './video-frame-scene';
 
 const makeGraph = () => new MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>();
 
@@ -18,14 +33,22 @@ const addNode = (
     x: number,
     y: number
 ) => {
-    graph.addNode(id, { visible: true, zIndex: 0, x, y, type: StationType.LondonTubeBasic });
+    graph.addNode(id, {
+        visible: true,
+        zIndex: 0,
+        x,
+        y,
+        type: StationType.LondonTubeBasic,
+    });
 };
 
 const addEdge = (
     graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
     id: string,
     source: string,
-    target: string
+    target: string,
+    startFrom: 'from' | 'to' = 'from',
+    color: Theme = [CityCode.Other, '', '#000000', MonoColour.white]
 ) => {
     graph.addDirectedEdgeWithKey(id, source, target, {
         visible: true,
@@ -34,354 +57,311 @@ const addEdge = (
         style: 'single-color' as any,
         reconcileId: '',
         parallelIndex: -1,
-        diagonal: { startFrom: 'from' as const, offsetFrom: 0, offsetTo: 0, roundCornerFactor: 7.5 },
+        diagonal: {
+            startFrom,
+            offsetFrom: 0,
+            offsetTo: 0,
+            roundCornerFactor: 7.5,
+        },
+        'single-color': {
+            color,
+        },
     });
 };
 
-describe('buildAnimationPhases', () => {
-    it('uses one second for quick-complete actions while retaining the normal minimum duration', () => {
-        const graph = makeGraph();
-        addNode(graph, 'stn_a', 0, 0);
-        addNode(graph, 'stn_b', 100, 0);
-        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
-        const line: TimelineLine = {
-            id: 'line1',
-            groupId: 'group1',
-            text: 'Segment 1',
-            elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }],
+const toTimeline = (...entries: TimelineEntry[]): TimelineDocument => ({
+    ...createEmptyTimelineDocument(),
+    track: entries,
+});
+
+const nodeEntry = (refId: `stn_${string}`, index: number): TimelineElementEntry => ({
+    id: `timeline_node_${index}`,
+    kind: 'node',
+    refId,
+    phase: 'enter',
+    showAnimation: true,
+});
+
+const edgeEntry = (refId: `line_${string}`, index: number): TimelineElementEntry => ({
+    id: `timeline_edge_${index}`,
+    kind: 'edge',
+    refId,
+    phase: 'enter',
+    showAnimation: true,
+});
+
+describe('video export watermark', () => {
+    it('keeps a small watermark fixed to the top-right corner when the camera moves', () => {
+        const outputWidth = 1280;
+        const outputHeight = 720;
+        const originalViewBox = { x: -160, y: -90, width: 320, height: 180 };
+        const movedViewBox = { x: 840, y: 410, width: 320, height: 180 };
+
+        const getPixelBounds = (viewBox: typeof originalViewBox) => {
+            const layout = getVideoWatermarkLayout(viewBox, outputWidth, outputHeight);
+            const pixelsPerWorldUnit = outputWidth / viewBox.width;
+            return {
+                left: (layout.x - viewBox.x) * pixelsPerWorldUnit,
+                top: (layout.y - viewBox.y) * pixelsPerWorldUnit,
+                width: layout.width * pixelsPerWorldUnit,
+                height: layout.height * pixelsPerWorldUnit,
+            };
         };
 
-        expect(getActionLineMinimumDuration(line, 1)).toBe(3.5);
-        expect(
-            buildAnimationPhases(
-                [
-                    {
-                        id: 'row1',
-                        date: '',
-                        activeLineIds: [],
-                        remark: '',
-                        actionType: 'open',
-                        actionLineId: 'line1',
-                        actionDuration: 3,
-                        quickComplete: true,
-                    },
-                ],
-                [line],
-                graph
-            )[0].durationWeight
-        ).toBe(1);
-    });
+        const originalBounds = getPixelBounds(originalViewBox);
+        const movedBounds = getPixelBounds(movedViewBox);
 
-    it('calculates station-only duration when a line has no edges', () => {
+        expect(movedBounds).toEqual(originalBounds);
+        expect(originalBounds.top).toBe(20);
+        expect(originalBounds.left + originalBounds.width).toBe(outputWidth - 20);
+        expect(originalBounds.width).toBeLessThan(outputWidth * 0.2);
+        expect(originalBounds.height).toBeLessThan(outputHeight * 0.1);
+    });
+});
+
+describe('generateAnimationSequence', () => {
+    it('renders strictly in timeline order when timeline exists', () => {
         const graph = makeGraph();
         addNode(graph, 'stn_a', 0, 0);
         addNode(graph, 'stn_b', 100, 0);
-        const line: TimelineLine = {
-            id: 'line1',
-            groupId: 'group1',
-            text: 'Segment 1',
-            elements: [{ id: 'stn_a' }, { id: 'stn_b' }],
-        };
-
-        expect(getActionLineMinimumDuration(line, 1)).toBe(3);
-    });
-
-    it('creates open phases with elements from TimelineLine', () => {
-        const actionRows: ActionRow[] = [
-            {
-                id: 'row1',
-                date: '2024-01-01',
-                activeLineIds: ['group1'],
-                remark: 'First phase',
-                actionType: 'open',
-                actionLineId: 'line1',
-            },
-        ];
-
-        const timelineLines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab', reverse: true }],
-            },
-        ];
-
-        const graph = makeGraph();
-        addNode(graph, 'stn_a', 0, 0);
-        addNode(graph, 'stn_b', 100, 0);
+        addNode(graph, 'stn_c', 200, 0);
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
+        addEdge(graph, 'line_bc', 'stn_b', 'stn_c');
 
-        const phases = buildAnimationPhases(actionRows, timelineLines, graph);
+        const timeline = toTimeline(
+            nodeEntry('stn_b', 1),
+            edgeEntry('line_bc', 2),
+            nodeEntry('stn_c', 3),
+            nodeEntry('stn_a', 4),
+            edgeEntry('line_ab', 5)
+        );
+        const sequence = generateAnimationSequence(graph, timeline);
 
-        expect(phases).toHaveLength(1);
-        expect(phases[0].type).toBe('open');
-        expect(phases[0].date).toBe('2024-01-01');
-        expect(phases[0].remark).toBe('First phase');
-        expect(phases[0].activeLineIds).toEqual(['group1']);
-        expect(phases[0].elements).toEqual([
-            { id: 'stn_a', kind: 'node', reverse: false, version: 1 },
-            { id: 'stn_b', kind: 'node', reverse: false, version: 1 },
+        expect(sequence.steps).toEqual([
+            { id: 'stn_b', kind: 'node', reverse: false },
+            { id: 'line_bc', kind: 'edge', reverse: false },
+            { id: 'stn_c', kind: 'node', reverse: false },
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+        ]);
+        expect(sequence.nodes).toEqual(['stn_b', 'stn_c', 'stn_a']);
+        expect(sequence.edges).toEqual(['line_bc', 'line_ab']);
+    });
+
+    it.each(['from', 'to'] as const)('uses timeline traversal independently of path startFrom=%s', startFrom => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b', startFrom);
+
+        const forwardTimeline = toTimeline(nodeEntry('stn_a', 1), edgeEntry('line_ab', 2), nodeEntry('stn_b', 3));
+        const reverseTimeline = toTimeline(nodeEntry('stn_b', 1), edgeEntry('line_ab', 2), nodeEntry('stn_a', 3));
+
+        const forwardSequence = generateAnimationSequence(graph, forwardTimeline);
+        const reverseSequence = generateAnimationSequence(graph, reverseTimeline);
+
+        expect(forwardSequence.steps).toEqual([
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'stn_b', kind: 'node', reverse: false },
+        ]);
+        expect(reverseSequence.steps).toEqual([
+            { id: 'stn_b', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: true },
+            { id: 'stn_a', kind: 'node', reverse: false },
+        ]);
+    });
+
+    it('propagates a known start forward through consecutive line entries', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addNode(graph, 'stn_c', 200, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b', 'to');
+        addEdge(graph, 'line_bc', 'stn_b', 'stn_c', 'to');
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(nodeEntry('stn_a', 1), edgeEntry('line_ab', 2), edgeEntry('line_bc', 3))
+        );
+
+        expect(sequence.steps).toEqual([
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'line_bc', kind: 'edge', reverse: false },
+        ]);
+    });
+
+    it('propagates a known destination backward through consecutive line entries', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addNode(graph, 'stn_c', 200, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b', 'to');
+        addEdge(graph, 'line_bc', 'stn_b', 'stn_c', 'to');
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(edgeEntry('line_ab', 1), edgeEntry('line_bc', 2), nodeEntry('stn_c', 3))
+        );
+
+        expect(sequence.steps).toEqual([
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'line_bc', kind: 'edge', reverse: false },
+            { id: 'stn_c', kind: 'node', reverse: false },
+        ]);
+    });
+
+    it('propagates reverse travel through consecutive line entries', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addNode(graph, 'stn_c', 200, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
+        addEdge(graph, 'line_bc', 'stn_b', 'stn_c');
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(nodeEntry('stn_c', 1), edgeEntry('line_bc', 2), edgeEntry('line_ab', 3))
+        );
+
+        expect(sequence.steps).toEqual([
+            { id: 'stn_c', kind: 'node', reverse: false },
+            { id: 'line_bc', kind: 'edge', reverse: true },
             { id: 'line_ab', kind: 'edge', reverse: true },
         ]);
     });
 
-    it('creates close phases with elements from TimelineLine', () => {
-        const actionRows: ActionRow[] = [
-            {
-                id: 'row1',
-                date: '',
-                activeLineIds: [],
-                remark: '',
-                actionType: 'close',
-                actionLineId: 'line1',
-            },
-        ];
-
-        const timelineLines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }],
-            },
-        ];
-
+    it('does not propagate line direction across an unrelated valid station', () => {
         const graph = makeGraph();
         addNode(graph, 'stn_a', 0, 0);
         addNode(graph, 'stn_b', 100, 0);
-
-        const phases = buildAnimationPhases(actionRows, timelineLines, graph);
-
-        expect(phases[0].type).toBe('close');
-        expect(phases[0].elements).toHaveLength(2);
-        expect(phases[0].elements[0]).toMatchObject({ id: 'stn_a', kind: 'node' });
-    });
-
-    it('creates overview and wait phases without elements', () => {
-        const actionRows: ActionRow[] = [
-            { id: 'row1', date: '', activeLineIds: [], remark: '', actionType: 'overview', actionLineId: undefined },
-            { id: 'row2', date: '', activeLineIds: [], remark: '', actionType: 'wait', actionLineId: undefined },
-        ];
-
-        const phases = buildAnimationPhases(actionRows, [], makeGraph());
-
-        expect(phases[0].type).toBe('overview');
-        expect(phases[0].elements).toHaveLength(0);
-        expect(phases[1].type).toBe('wait');
-        expect(phases[1].elements).toHaveLength(0);
-    });
-
-    it('derives activeLineIds from action order (open adds, close removes)', () => {
-        const actionRows: ActionRow[] = [
-            { id: 'row1', date: '', activeLineIds: [], remark: '', actionType: 'open', actionLineId: 'line1' },
-            { id: 'row2', date: '', activeLineIds: [], remark: '', actionType: 'open', actionLineId: 'line2' },
-            { id: 'row3', date: '', activeLineIds: [], remark: '', actionType: 'close', actionLineId: 'line1' },
-            { id: 'row4', date: '', activeLineIds: [], remark: '', actionType: 'overview', actionLineId: undefined },
-        ];
-
-        const timelineLines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }],
-            },
-            {
-                id: 'line2',
-                groupId: 'group2',
-                text: 'Segment 2',
-                elements: [{ id: 'stn_c' }, { id: 'stn_d' }, { id: 'line_cd' }],
-            },
-        ];
-
-        const graph = makeGraph();
-        addNode(graph, 'stn_a', 0, 0);
-        addNode(graph, 'stn_b', 100, 0);
+        addNode(graph, 'stn_c', 200, 0);
+        addNode(graph, 'stn_x', 300, 0);
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
+        addEdge(graph, 'line_cb', 'stn_c', 'stn_b');
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(edgeEntry('line_ab', 1), nodeEntry('stn_x', 2), edgeEntry('line_cb', 3))
+        );
+
+        expect(sequence.steps).toEqual([
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'stn_x', kind: 'node', reverse: false },
+            { id: 'line_cb', kind: 'edge', reverse: false },
+        ]);
+    });
+
+    it('falls back to source-to-target for disconnected consecutive lines', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
         addNode(graph, 'stn_c', 200, 0);
         addNode(graph, 'stn_d', 300, 0);
-        addEdge(graph, 'line_cd', 'stn_c', 'stn_d');
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
+        addEdge(graph, 'line_dc', 'stn_d', 'stn_c', 'to');
 
-        const phases = buildAnimationPhases(actionRows, timelineLines, graph);
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(nodeEntry('stn_a', 1), edgeEntry('line_ab', 2), edgeEntry('line_dc', 3))
+        );
 
-        expect(phases[0].activeLineIds).toEqual(['group1']);
-        expect(phases[1].activeLineIds).toEqual(['group1', 'group2']);
-        expect(phases[2].activeLineIds).toEqual(['group2']);
-        expect(phases[3].activeLineIds).toEqual(['group2']);
+        expect(sequence.steps).toEqual([
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'line_dc', kind: 'edge', reverse: false },
+        ]);
     });
 
-    it('marks quick completion and computes the parallel focus bounds', () => {
+    it('prefers the previous station when adjacent stations conflict', () => {
         const graph = makeGraph();
         addNode(graph, 'stn_a', 0, 0);
         addNode(graph, 'stn_b', 100, 0);
-        addNode(graph, 'stn_c', 300, 100);
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
-        addEdge(graph, 'line_bc', 'stn_b', 'stn_c');
-        const lines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }],
-            },
-            {
-                id: 'line2',
-                groupId: 'group2',
-                text: 'Segment 2',
-                elements: [{ id: 'stn_b' }, { id: 'stn_c' }, { id: 'line_bc' }],
-            },
-        ];
-        const phases = buildAnimationPhases(
-            [
-                { id: 'focus', date: '', activeLineIds: [], remark: '', actionType: 'focus' },
-                {
-                    id: 'open1',
-                    date: '',
-                    activeLineIds: [],
-                    remark: '',
-                    actionType: 'open',
-                    actionLineId: 'line1',
-                    quickComplete: true,
-                    withPrevious: true,
-                },
-                {
-                    id: 'open2',
-                    date: '',
-                    activeLineIds: [],
-                    remark: '',
-                    actionType: 'open',
-                    actionLineId: 'line2',
-                    withPrevious: true,
-                },
-            ],
-            lines,
-            graph
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(nodeEntry('stn_a', 1), edgeEntry('line_ab', 2), nodeEntry('stn_a', 3))
         );
-        expect(phases[1].quickComplete).toBe(true);
-        expect(phases[1].batchIndex).toBe(phases[2].batchIndex);
-        expect(phases[0].focusTargets).toHaveLength(5);
-        expect(phases[0].focusTargetBounds).toEqual({ xMin: 0, xMax: 300, yMin: 0, yMax: 100 });
-        expect(phases[0].focusTargetBatch).toBe(phases[1].batchIndex);
+
+        expect(sequence.steps[1]).toEqual({ id: 'line_ab', kind: 'edge', reverse: false });
     });
 
-    it('并行批次内后续动作继承首动作的已开通线路与备注，批次结束后统一结算', () => {
+    it('filters invalid references before inferring adjacent station direction', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b', 'to');
+
+        const sequence = generateAnimationSequence(
+            graph,
+            toTimeline(
+                nodeEntry('stn_a', 1),
+                nodeEntry('stn_missing', 2),
+                edgeEntry('line_ab', 3),
+                edgeEntry('line_missing', 4),
+                nodeEntry('stn_b', 5)
+            )
+        );
+
+        expect(sequence.steps).toEqual([
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'stn_b', kind: 'node', reverse: false },
+        ]);
+    });
+
+    it('preserves entrance order and direction when a pro timeline includes keyframes and exits', () => {
         const graph = makeGraph();
         addNode(graph, 'stn_a', 0, 0);
         addNode(graph, 'stn_b', 100, 0);
         addNode(graph, 'stn_c', 200, 0);
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
         addEdge(graph, 'line_bc', 'stn_b', 'stn_c');
-        const lines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }],
-            },
-            {
-                id: 'line2',
-                groupId: 'group2',
-                text: 'Segment 2',
-                elements: [{ id: 'stn_b' }, { id: 'stn_c' }, { id: 'line_bc' }],
-            },
+
+        const entrances = [
+            nodeEntry('stn_c', 1),
+            nodeEntry('stn_a', 2),
+            edgeEntry('line_ab', 3),
+            edgeEntry('line_bc', 4),
+            nodeEntry('stn_b', 5),
         ];
-        const actionRows: ActionRow[] = [
-            {
-                id: 'a',
-                date: '2024-05-01',
-                activeLineIds: [],
-                remark: '批次备注',
-                actionType: 'open',
-                actionLineId: 'line1',
-            },
-            {
-                id: 'b',
-                date: '',
-                activeLineIds: [],
-                remark: '',
-                actionType: 'open',
-                actionLineId: 'line2',
-                withPrevious: true,
-            },
-            { id: 'c', date: '', activeLineIds: [], remark: '', actionType: 'wait' },
-        ];
-
-        const phases = buildAnimationPhases(actionRows, lines, graph);
-
-        // 批次进行中：两个动作显示完全相同的"已开通线路"、日期与备注
-        expect(phases[0].activeLineIds).toEqual(['group1']);
-        expect(phases[1].activeLineIds).toEqual(['group1']);
-        expect(phases[0].date).toBe('2024-05-01');
-        expect(phases[1].date).toBe('2024-05-01');
-        expect(phases[1].remark).toBe('批次备注');
-        // 后续并行动作的目标线路段仍然各自独立（动画元素来自 line2）
-        expect(phases[1].elements.map(e => e.id)).toContain('line_bc');
-        // 批次结束后：第二个动作的线路才统一结算进来
-        expect(phases[2].activeLineIds).toEqual(['group1', 'group2']);
-    });
-
-    it('将元素的 simultaneous 标志透传到动画步骤', () => {
-        const graph = makeGraph();
-        addNode(graph, 'stn_a', 0, 0);
-        addNode(graph, 'stn_b', 100, 0);
-        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
-        const line: TimelineLine = {
-            id: 'line1',
-            groupId: 'group1',
-            text: 'Segment 1',
-            elements: [{ id: 'stn_a' }, { id: 'stn_b', simultaneous: true }, { id: 'line_ab' }],
+        const timeline: TimelineDocument = {
+            ...toTimeline(
+                ...entrances.slice(0, 3),
+                { id: 'timeline_keyframe', kind: 'keyframe', refId: 'stn_c', x: 300, y: 100 },
+                { ...nodeEntry('stn_c', 6), phase: 'exit' },
+                { ...edgeEntry('line_ab', 7), phase: 'exit' },
+                ...entrances.slice(3)
+            ),
         };
-        const phases = buildAnimationPhases(
-            [{ id: 'a', date: '', activeLineIds: [], remark: '', actionType: 'open', actionLineId: 'line1' }],
-            [line],
-            graph
-        );
-        expect(phases[0].elements.find(e => e.id === 'stn_b')?.simultaneous).toBe(true);
-        expect(phases[0].elements.find(e => e.id === 'line_ab')?.simultaneous).toBeUndefined();
+
+        const sequence = generateAnimationSequence(graph, timeline);
+
+        expect(sequence).toEqual(generateAnimationSequence(graph, toTimeline(...entrances)));
+        expect(sequence.steps).toEqual([
+            { id: 'stn_c', kind: 'node', reverse: false },
+            { id: 'stn_a', kind: 'node', reverse: false },
+            { id: 'line_ab', kind: 'edge', reverse: false },
+            { id: 'line_bc', kind: 'edge', reverse: true },
+            { id: 'stn_b', kind: 'node', reverse: false },
+        ]);
     });
 
-    it('fills targetGroupId for open/close phases only', () => {
-        const actionRows: ActionRow[] = [
-            { id: 'row1', date: '', activeLineIds: [], remark: '', actionType: 'open', actionLineId: 'line1' },
-            { id: 'row2', date: '', activeLineIds: [], remark: '', actionType: 'overview', actionLineId: undefined },
-            { id: 'row3', date: '', activeLineIds: [], remark: '', actionType: 'close', actionLineId: 'line1' },
-        ];
-
-        const timelineLines: TimelineLine[] = [
-            {
-                id: 'line1',
-                groupId: 'group1',
-                text: 'Segment 1',
-                elements: [{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }],
-            },
-        ];
-
-        const graph = makeGraph();
-        addNode(graph, 'stn_a', 0, 0);
-        addNode(graph, 'stn_b', 100, 0);
-        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
-
-        const phases = buildAnimationPhases(actionRows, timelineLines, graph);
-
-        expect(phases[0].targetGroupId).toBe('group1');
-        expect(phases[1].targetGroupId).toBeUndefined();
-        expect(phases[2].targetGroupId).toBe('group1');
-    });
-});
-
-describe('buildFallbackSequence', () => {
-    it('orders nodes by position (x then y) and edges by max endpoint index', () => {
+    it('falls back to spatial order when timeline is absent', () => {
         const graph = makeGraph();
         addNode(graph, 'stn_a', 100, 100);
         addNode(graph, 'stn_b', 200, 100);
         addNode(graph, 'stn_c', 150, 200);
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
-        addEdge(graph, 'line_bc', 'stn_b', 'stn_c');
+        addEdge(graph, 'line_bc', 'stn_b', 'stn_c', 'to');
 
-        const steps = buildFallbackSequence(graph);
+        const sequence = generateAnimationSequence(graph, createEmptyTimelineDocument());
 
-        expect(steps).toEqual([
+        expect(sequence.nodes).toEqual(['stn_a', 'stn_b', 'stn_c']);
+        expect(sequence.edges).toEqual(['line_ab', 'line_bc']);
+        expect(sequence.steps).toEqual([
             { id: 'stn_a', kind: 'node', reverse: false },
             { id: 'stn_b', kind: 'node', reverse: false },
             { id: 'stn_c', kind: 'node', reverse: false },
@@ -391,40 +371,286 @@ describe('buildFallbackSequence', () => {
     });
 });
 
-describe('getActionLineMinimumDuration / getActionLineSuggestedDuration（同时链并行算法）', () => {
-    const makeLine = (elements: TimelineLine['elements']): TimelineLine => ({
-        id: 'line1',
-        groupId: 'group1',
-        text: 'Segment 1',
-        elements,
+describe('getPlaybackSegmentDurations', () => {
+    it('uses a fixed drawing speed and reserves one second for a camera reposition pause', () => {
+        const durations = getPlaybackSegmentDurations(30, [100, 200], 1);
+
+        expect(durations).toEqual({
+            edgeDurations: [1, 2],
+            pauseDuration: 1,
+        });
     });
 
-    it('同一条同时链内的车站与边并行，只计 max 成本', () => {
-        // stn_b 与 line_ab 均并入链头 stn_a：2 站 1 边并行 → max(1s, 0.5s) = 1s
-        const line = makeLine([
-            { id: 'stn_a' },
-            { id: 'stn_b', simultaneous: true },
-            { id: 'line_ab', simultaneous: true },
-        ]);
-        expect(getActionLineMinimumDuration(line, 1)).toBe(2);
-        expect(getActionLineSuggestedDuration(line, 1)).toBe(2);
+    it('does not change existing edge durations when the timeline grows or adds pauses', () => {
+        const shortTimeline = getPlaybackSegmentDurations(30, [100, 200], 0);
+        const longTimeline = getPlaybackSegmentDurations(30, [100, 200, 3000], 2);
+
+        expect(longTimeline.edgeDurations.slice(0, 2)).toEqual(shortTimeline.edgeDurations);
+        expect(longTimeline.edgeDurations[2]).toBe(30);
+        expect(shortTimeline.pauseDuration).toBe(0);
+        expect(longTimeline.pauseDuration).toBe(1);
     });
 
-    it('多条同时链之间串行求和', () => {
-        // 链1：stn_a + stn_b（并行，车站成本 1s）；链2：line_ab（普通元素开新链，0.5s/1s）
-        const line = makeLine([{ id: 'stn_a' }, { id: 'stn_b', simultaneous: true }, { id: 'line_ab' }]);
-        expect(getActionLineMinimumDuration(line, 1)).toBe(2.5);
-        expect(getActionLineSuggestedDuration(line, 1)).toBe(3);
+    it.each([0.5, 2])('scales drawing speed by %s without changing camera pauses', multiplier => {
+        const durations = getPlaybackSegmentDurations(30, [100, 200], 1, multiplier);
+
+        expect(durations.edgeDurations).toEqual([1 / multiplier, 2 / multiplier]);
+        expect(durations.pauseDuration).toBe(1);
     });
 
-    it('首元素即使带 simultaneous 标志也作为链头（不影响链划分）', () => {
-        const line = makeLine([{ id: 'stn_a', simultaneous: true }, { id: 'line_ab' }]);
-        expect(getActionLineMinimumDuration(line, 1)).toBe(2.5);
+    it('keeps drawing speed consistent at different frame rates', () => {
+        expect(getPlaybackSegmentDurations(60, [100, 200], 1, 1.5)).toEqual(
+            getPlaybackSegmentDurations(30, [100, 200], 1, 1.5)
+        );
     });
 
-    it('无"同时"元素时与线性公式等价', () => {
-        const line = makeLine([{ id: 'stn_a' }, { id: 'stn_b' }, { id: 'line_ab' }]);
-        expect(getActionLineMinimumDuration(line, 1)).toBe(3.5);
-        expect(getActionLineSuggestedDuration(line, 1)).toBe(4);
+    it('gives very short lines at least one frame without accelerating other lines', () => {
+        const durations = getPlaybackSegmentDurations(30, [1, 1000], 0);
+        expect(durations.edgeDurations[0]).toBeCloseTo(1 / 30);
+        expect(durations.edgeDurations[1]).toBe(10);
+    });
+
+    it('uses one frame for invalid line lengths', () => {
+        const durations = getPlaybackSegmentDurations(30, [0, Number.NaN, -1, Number.POSITIVE_INFINITY], 0);
+
+        expect(durations.edgeDurations).toEqual(Array(4).fill(1 / 30));
+        expect(durations.pauseDuration).toBe(0);
+    });
+
+    it.each([
+        [0, 2],
+        [10, 0.5],
+        [Number.NaN, 1],
+    ])('handles an out-of-range speed multiplier of %s', (multiplier, expectedDuration) => {
+        expect(getPlaybackSegmentDurations(30, [100], 0, multiplier).edgeDurations).toEqual([expectedDuration]);
+    });
+
+    it('handles a timeline with no edges', () => {
+        expect(getPlaybackSegmentDurations(30, [], 0)).toEqual({ edgeDurations: [], pauseDuration: 0 });
+    });
+});
+
+describe('getRenderedEdgeLength', () => {
+    it('measures the first main SVG path without accumulating style layers', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 100, 0);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b', 'to');
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        const primaryPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const decorativePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        group.id = 'line_ab';
+        primaryPath.getTotalLength = () => 240;
+        decorativePath.getTotalLength = () => 480;
+        group.append(primaryPath, decorativePath);
+        svg.appendChild(group);
+
+        expect(getRenderedEdgeLength(graph, svg, 'line_ab')).toBe(240);
+    });
+
+    it('falls back to endpoint distance when the SVG path cannot be measured', () => {
+        const graph = makeGraph();
+        addNode(graph, 'stn_a', 0, 0);
+        addNode(graph, 'stn_b', 30, 40);
+        addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+
+        expect(getRenderedEdgeLength(graph, svg, 'line_ab')).toBe(50);
+    });
+});
+
+describe('station frame geometry', () => {
+    const renderFrameGraph = (graph: ReturnType<typeof makeGraph>) => {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        renderVideoFrameGeometry(graph, svg);
+        return svg;
+    };
+
+    it('renders a Suzhou interchange from the visible line colors for the current frame', () => {
+        const graph = makeGraph();
+        const stationType = StationType.SuzhouRTInt;
+        const line1: Theme = [CityCode.Suzhou, 'sz1', '#78BA25', MonoColour.white];
+        const line2: Theme = [CityCode.Suzhou, 'sz2', '#ED3240', MonoColour.white];
+        const line3: Theme = [CityCode.Suzhou, 'sz3', '#F39800', MonoColour.white];
+        const attrs = structuredClone(stations[stationType].defaultAttrs);
+        attrs.transfer = [
+            [
+                [...line1, '', ''],
+                [...line2, '', ''],
+                [...line3, '', ''],
+            ],
+        ];
+
+        graph.addNode('stn_suzhou', {
+            visible: true,
+            zIndex: 0,
+            x: 0,
+            y: 0,
+            type: stationType,
+            [stationType]: attrs,
+        });
+        addNode(graph, 'misc_node_1', 100, 0);
+        addNode(graph, 'misc_node_2', 0, 100);
+        addNode(graph, 'misc_node_3', -100, 0);
+        addEdge(graph, 'line_1', 'stn_suzhou', 'misc_node_1', 'from', line1);
+        addEdge(graph, 'line_2', 'stn_suzhou', 'misc_node_2', 'from', line2);
+        addEdge(graph, 'line_3', 'stn_suzhou', 'misc_node_3', 'from', line3);
+
+        const frameGraph = createFrameStationGraph(graph, new Set(['line_1', 'line_2']));
+        const frameAttrs = frameGraph.getNodeAttribute('stn_suzhou', StationType.SuzhouRTInt);
+        const markup = renderFrameGraph(frameGraph).outerHTML;
+
+        expect(frameGraph.getNodeAttribute('stn_suzhou', 'type')).toBe(StationType.SuzhouRTInt);
+        expect(frameAttrs?.transfer[0].map(transfer => transfer[2])).toEqual(['#78BA25', '#ED3240']);
+        expect(markup).toContain('fill="#78BA25"');
+        expect(markup).toContain('fill="#ED3240"');
+        expect(markup).not.toContain('fill="#F39800"');
+    });
+
+    it('keeps the Suzhou interchange hit area transparent after the reveal animation', () => {
+        const graph = makeGraph();
+        const stationType = StationType.SuzhouRTInt;
+        graph.addNode('stn_suzhou', {
+            visible: true,
+            zIndex: 0,
+            x: 0,
+            y: 0,
+            type: stationType,
+            [stationType]: structuredClone(stations[stationType].defaultAttrs),
+        });
+
+        const svg = renderFrameGraph(graph);
+        const scene = createVideoFrameScene(svg, { nodeIds: ['stn_suzhou'], edgeIds: [] });
+        scene.applyNode('stn_suzhou', { visible: true, progress: 1 });
+        const container = scene.getGroup('stn_suzhou')!;
+
+        expect(container.getAttribute('opacity')).toBe('1');
+        expect(container.querySelector('#stn_core_stn_suzhou')?.getAttribute('opacity')).toBe('0');
+        expect(
+            Array.from(container.querySelectorAll('circle')).map(circle => circle.getAttribute('opacity'))
+        ).not.toContain('0');
+    });
+
+    it('renders the visible line color when a Suzhou interchange is temporarily a basic station', () => {
+        const graph = makeGraph();
+        const stationType = StationType.SuzhouRTInt;
+        const lineColor: Theme = [CityCode.Suzhou, 'sz2', '#ED3240', MonoColour.white];
+
+        graph.addNode('stn_suzhou', {
+            visible: true,
+            zIndex: 0,
+            x: 0,
+            y: 0,
+            type: stationType,
+            [stationType]: structuredClone(stations[stationType].defaultAttrs),
+        });
+        addNode(graph, 'misc_node_1', 100, 0);
+        addEdge(graph, 'line_1', 'stn_suzhou', 'misc_node_1', 'from', lineColor);
+
+        const frameGraph = createFrameStationGraph(graph, new Set(['line_1']));
+        const frameAttrs = frameGraph.getNodeAttribute('stn_suzhou', StationType.SuzhouRTBasic);
+
+        expect(frameGraph.getNodeAttribute('stn_suzhou', 'type')).toBe(StationType.SuzhouRTBasic);
+        expect(frameAttrs?.color).toEqual(lineColor);
+    });
+
+    it('preserves the current map station state when automatic station type changes are disabled', () => {
+        const graph = makeGraph();
+        const stationType = StationType.SuzhouRTInt;
+        graph.addNode('stn_suzhou', {
+            visible: true,
+            zIndex: 0,
+            x: 0,
+            y: 0,
+            type: stationType,
+            [stationType]: structuredClone(stations[stationType].defaultAttrs),
+        });
+
+        const frameGraph = createFrameStationGraph(graph, new Set(), false);
+
+        expect(frameGraph).not.toBe(graph);
+        expect(frameGraph.export()).toEqual(graph.export());
+        expect(frameGraph.getNodeAttribute('stn_suzhou', 'type')).toBe(StationType.SuzhouRTInt);
+    });
+});
+
+describe('embedVideoExportStyles', () => {
+    it('embeds the station name outline CSS used by dynamically replaced stations', () => {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.innerHTML = '<g class="rmp-name-outline" stroke-width="2.5"><text>Station</text></g>';
+
+        embedVideoExportStyles(svg);
+        embedVideoExportStyles(svg);
+        expect(svg.querySelectorAll('style#rmp_video_export_styles')).toHaveLength(1);
+
+        const style = svg.querySelector('style#rmp_video_export_styles');
+        expect(style?.textContent).toContain('.rmp-name-outline');
+        expect(style?.textContent).toContain('paint-order: stroke');
+        expect(style?.textContent).toContain('stroke: #ffffff');
+        expect(svg.outerHTML).toContain('class="rmp-name-outline"');
+    });
+});
+
+describe('interpolateCameraZoom', () => {
+    it('uses the current zoom and whole-map fit at the transition endpoints', () => {
+        expect(interpolateCameraZoom(200, 25, 0)).toBe(200);
+        expect(interpolateCameraZoom(200, 25, 1)).toBe(25);
+    });
+});
+
+describe('getStationActivationProgress', () => {
+    it('reveals an approaching station earlier when the viewport is zoomed out', () => {
+        const zoomedOutProgress = getStationActivationProgress(1000, 50);
+        const zoomedInProgress = getStationActivationProgress(1000, 200);
+
+        expect(zoomedOutProgress).toBeLessThan(zoomedInProgress);
+        expect(zoomedOutProgress).toBeGreaterThanOrEqual(0);
+        expect(zoomedInProgress).toBeLessThanOrEqual(1);
+    });
+
+    it('reveals the station immediately when the whole line fits inside the viewport radius', () => {
+        expect(getStationActivationProgress(50, 100)).toBe(0);
+    });
+
+    it('waits for the line endpoint when its rendered length is unavailable', () => {
+        expect(getStationActivationProgress(0, 100)).toBe(1);
+        expect(getStationActivationProgress(Number.NaN, 100)).toBe(1);
+    });
+});
+
+describe('getNodeRevealProgressForFrame', () => {
+    it.each([15, 24])('finishes the short station fade by 0.4 seconds at %s FPS', fps => {
+        const endFrame = Math.ceil(fps * 0.4);
+        expect(getNodeRevealProgressForFrame('stn_station', endFrame, 0, fps)).toEqual({
+            nodeProgress: 1,
+            textProgress: 1,
+        });
+        expect(getNodeRevealProgressForFrame('stn_station', endFrame - 1, 0, fps).nodeProgress).toBeLessThan(1);
+    });
+
+    it('fades stations and their names in together over 0.4 seconds', () => {
+        expect(getNodeRevealProgressForFrame('stn_station', 10, 10, 30)).toEqual({
+            nodeProgress: 0,
+            textProgress: 0,
+        });
+        expect(getNodeRevealProgressForFrame('stn_station', 16, 10, 30)).toEqual({
+            nodeProgress: 0.5,
+            textProgress: 0.5,
+        });
+        expect(getNodeRevealProgressForFrame('stn_station', 22, 10, 30)).toEqual({
+            nodeProgress: 1,
+            textProgress: 1,
+        });
+    });
+});
+
+describe('getOverviewZoomProgress', () => {
+    it('reaches the fullscreen scale halfway through the overview and holds it', () => {
+        expect(getOverviewZoomProgress(0, 30)).toBe(0);
+        expect(getOverviewZoomProgress(14, 30)).toBe(1);
+        expect(getOverviewZoomProgress(29, 30)).toBe(1);
     });
 });

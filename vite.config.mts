@@ -8,11 +8,16 @@ import svgr from 'vite-plugin-svgr';
 
 // https://vitejs.dev/config
 export default defineConfig({
-    // base: '/rmp/',
+    base: '/rmp/',
+    optimizeDeps: {
+        exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/core'],
+    },
     plugins: [
         react(),
         svgr(),
-        checker({ typescript: false, eslint: { lintCommand: 'eslint ./src', useFlatConfig: true } }),
+        ...(process.env.VITEST
+            ? []
+            : [checker({ typescript: true, eslint: { lintCommand: 'eslint ./src', useFlatConfig: true } })]),
         visualizer({ filename: 'dist/bundle-report.html', gzipSize: true }),
     ],
     build: {

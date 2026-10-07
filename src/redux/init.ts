@@ -111,21 +111,8 @@ export const initStore = async (store: RootStore) => {
     // Upgrade param and inject to ParamState.
     const param = await upgrade(paramState);
 
-    const { version, graph, timeline: timelineSave, ...save } = JSON.parse(param) as RMPSave;
-    // graphology 的 import 按【引用】存储属性对象。下方同一份 graph 会进入 Redux，
-    // 被 Immer 的 autoFreeze 深度冻结，从而连带冻结 window.graph 的属性，导致
-    // setEdgeAttribute/removeNodeAttribute 等变更抛出 "object is not extensible"。
-    // 因此这里先深拷贝一份给 window.graph，切断与 Redux 状态的引用共享。
-    window.graph = MultiDirectedGraph.from(structuredClone(graph));
-    if (store.getState().app.preference.timelineFeatureEnabled) {
-        normalizeTimelineStationFlags(window.graph);
-    }
-    const project: ProjectSnapshot = {
-        ...save,
-        mapEnabled: save.mapEnabled ?? false,
-        mapStyle: save.mapStyle ?? structuredClone(DEFAULT_MAP_STYLE),
-        graph,
-    };
+    const { version, images: _images, ...project } = JSON.parse(param) as RMPSave;
+    window.graph = MultiDirectedGraph.from(project.graph);
     store.dispatch(initializeProject(project));
     await Promise.all([store.dispatch(refreshNodesThunk()), store.dispatch(refreshEdgesThunk())]);
 
@@ -169,9 +156,8 @@ export const initStore = async (store: RootStore) => {
         },
         effect: (_action, listenerApi) => {
             try {
-                const state = store.getState();
-                const { undoStack, redoStack, unsavedDate, validationUndoPending, ...timelineForSave } = state.timeline;
-                localStorage.setItem(LocalStorageKey.PARAM, stringifyParam(state.param, timelineForSave));
+                const state = listenerApi.getState();
+                localStorage.setItem(LocalStorageKey.PARAM, stringifyParam(state.param));
                 onRMPSaveUpdate(); // notify rmt to update the save
             } catch (error) {
                 if (error instanceof Error && error.name == 'QuotaExceededError') {

@@ -5,7 +5,9 @@ import React from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EdgeAttributes, GraphAttributes, NodeAttributes } from '../../../constants/constants';
 import { MiscNodeType } from '../../../constants/nodes';
-import store, { createStore } from '../../../redux';
+import { createStore } from '../../../redux';
+import store from '../../../redux/store';
+import { setActiveSubscriptions } from '../../../redux/account/account-slice';
 import { render } from '../../../test-utils';
 import InfoSection from './info-section';
 
