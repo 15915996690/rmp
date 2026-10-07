@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import { EdgeAttributes, GraphAttributes, NodeAttributes, Theme } from '../constants/constants';
 import { LineDefinition } from '../constants/line-definitions';
 import i18n from '../i18n/config';
+import { resolveVirtualNodeReferences } from './virtual-node-station';
 
 type Graph = SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
 type Edge = Graph['edges'][number];
@@ -30,7 +31,21 @@ export const getLineTheme = (edge: Edge | undefined): Theme | undefined => {
 };
 
 const themeKey = (edge: Edge) => JSON.stringify(getLineTheme(edge));
+export { themeKey as getLineThemeKey };
 const station = (id: string) => id.startsWith('stn_');
+
+// 解析图 → (线路 id → 拓扑) 的缓存
+const topologyCache = new WeakMap<Graph, Map<string, LineTopology>>();
+// 解析图 → (边 key → 边) 的索引，避免每条线路都全量过滤边
+const resolvedEdgeMaps = new WeakMap<Graph, Map<string, Edge>>();
+const getResolvedEdgeMap = (resolvedGraph: Graph): Map<string, Edge> => {
+    let map = resolvedEdgeMaps.get(resolvedGraph);
+    if (!map) {
+        map = new Map(resolvedGraph.edges.map(edge => [edge.key!, edge]));
+        resolvedEdgeMaps.set(resolvedGraph, map);
+    }
+    return map;
+};
 
 const adjacency = (edges: Edge[]): Adjacency => {
     const result: Adjacency = new Map();
@@ -89,10 +104,20 @@ export interface LineTopology {
 }
 
 export const getLineTopology = (graph: Graph, line: LineDefinition): LineTopology => {
-    const owned = new Set(line.edgeIds);
-    const edges = graph.edges.filter(edge => owned.has(edge.key!));
+    const resolvedGraph = resolveVirtualNodeReferences(graph);
+    // 同一解析图上同一线路只计算一次（图变化时 resolvedGraph 对象随之改变，缓存自动失效）
+    let cache = topologyCache.get(resolvedGraph);
+    if (!cache) {
+        cache = new Map();
+        topologyCache.set(resolvedGraph, cache);
+    }
+    const hit = cache.get(line.id);
+    if (hit) return hit;
+
+    const edgeMap = getResolvedEdgeMap(resolvedGraph);
+    const edges = line.edgeIds.map(id => edgeMap.get(id)).filter((edge): edge is Edge => Boolean(edge));
     const adj = adjacency(edges);
-    const nodes = new Map(graph.nodes.map(node => [node.key, node.attributes]));
+    const nodes = new Map(resolvedGraph.nodes.map(node => [node.key, node.attributes]));
     const compare = (a: string, b: string) => {
         const aa = nodes.get(a),
             bb = nodes.get(b);
@@ -125,7 +150,7 @@ export const getLineTopology = (graph: Graph, line: LineDefinition): LineTopolog
         }
     }
     const terminalIds = [...terminals].sort(compare);
-    return {
+    const topology: LineTopology = {
         theme: getLineTheme(edges[0])!,
         stationIds,
         terminalIds,
@@ -133,6 +158,8 @@ export const getLineTopology = (graph: Graph, line: LineDefinition): LineTopolog
         branchStations,
         type: branching ? 'BRANCH' : cycle ? 'LOOP' : 'LINE',
     };
+    cache.set(line.id, topology);
+    return topology;
 };
 
 /** Repairs ownership at the commit boundary. Existing definitions never merge with each other. */
@@ -177,6 +204,46 @@ export const reconcileLineDefinitions = (graph: Graph): Graph => {
         const candidates = getLineTopology(graph, line).startCandidates;
         if (!candidates.includes(line.exportStartStationId)) line.exportStartStationId = candidates[0] ?? '';
     }
+    // 线路标志杂项节点自动命名：某线路色仅被一种标志文本使用时，将标志名称填入该颜色的所有已分配线路
+    const badgeTexts = new Map<string, { text: string; names: [string, string] }[]>();
+    for (const node of graph.nodes) {
+        const nodeAttrs = node.attributes;
+        const type = nodeAttrs?.type as string | undefined;
+        if (!nodeAttrs || !type?.endsWith('-line-badge')) continue;
+        const attrs = nodeAttrs[type as keyof typeof nodeAttrs] as
+            | {
+                  color?: Theme;
+                  num?: string | number;
+                  names?: string[];
+                  content?: string;
+                  lineCode?: string;
+                  name?: string;
+              }
+            | undefined;
+        const color = attrs?.color;
+        if (!Array.isArray(color) || color.length !== 4) continue;
+        const names: [string, string] = Array.isArray(attrs?.names)
+            ? [(attrs.names[0] ?? '').trim(), (attrs.names[1] ?? '').trim()]
+            : ['', ''];
+        const text =
+            names[0] ||
+            names[1] ||
+            (attrs?.num !== undefined && attrs.num !== null ? String(attrs.num) : '').trim() ||
+            (attrs?.content ?? attrs?.lineCode ?? attrs?.name ?? '').trim();
+        if (!text) continue;
+        const key = JSON.stringify(color);
+        const list = badgeTexts.get(key) ?? [];
+        list.push({ text, names: text === names[0] ? names : ['', ''] });
+        badgeTexts.set(key, list);
+    }
+    for (const line of definitions) {
+        if (line.name[0].trim() || !line.edgeIds.length) continue;
+        const theme = getLineTheme(available.get(line.edgeIds[0]));
+        if (!theme) continue;
+        const list = badgeTexts.get(JSON.stringify(theme));
+        if (!list || new Set(list.map(badge => badge.text)).size !== 1) continue;
+        line.name = [list[0].names[0] || list[0].text, line.name[1].trim() || list[0].names[1]];
+    }
     if (definitions.length === 0 && !graph.attributes?.lineDefinitions && !graph.attributes?.unassignedLineEdgeIds)
         return graph;
     return {
@@ -205,7 +272,11 @@ export const getStationLabel = (graph: Graph, id: string): string => {
     const attrs = graph.nodes.find(node => node.key === id)?.attributes;
     const names = (attrs?.[attrs.type] as { names?: string[] } | undefined)?.names;
     return (
-        names?.find(name => name.trim())?.replaceAll('\n', ' ') ?? (id ? i18n.t('header.lineInfo.unnamedStation') : '—')
+        names
+            ?.find(name => name.trim())
+            ?.replaceAll('\n', ' ')
+            .replaceAll('　', '')
+            .trim() ?? (id ? i18n.t('header.lineInfo.unnamedStation') : '—')
     );
 };
 
@@ -213,7 +284,7 @@ export const getLineEndpointsLabel = (graph: Graph, line: LineDefinition): strin
     const topology = getLineTopology(graph, line);
     const start = line.exportStartStationId;
     const ends = topology.type === 'LOOP' ? [start] : topology.terminalIds.filter(id => id !== start);
-    return `${getStationLabel(graph, start)} — ${ends.map(id => getStationLabel(graph, id)).join(' / ')}`;
+    return `${getStationLabel(graph, start)}—${ends.map(id => getStationLabel(graph, id)).join('/')}`;
 };
 
 export interface LineRoute {
@@ -227,8 +298,9 @@ export interface LineRoute {
 
 /** Enumerates simple paths for an explicitly chosen pair, or both directions around a simple loop. */
 export const getLineRoutes = (graph: Graph, line: LineDefinition, from: string, to: string): LineRoute[] => {
+    const resolvedGraph = resolveVirtualNodeReferences(graph);
     const owned = new Set(line.edgeIds);
-    const adj = adjacency(graph.edges.filter(edge => owned.has(edge.key!)));
+    const adj = adjacency(resolvedGraph.edges.filter(edge => owned.has(edge.key!)));
     const routes: LineRoute[] = [];
     const walk = (node: string, path: string[], bundles: string[][]) => {
         if (node === to && path.length > 1) {
@@ -338,6 +410,70 @@ export const assignLineSection = (graph: Graph, sectionId: string, targetId?: st
             lineDefinitions: definitions,
             unassignedLineEdgeIds: (graph.attributes?.unassignedLineEdgeIds ?? []).filter(id => !selected.has(id)),
         },
+    });
+};
+
+/**
+ * Groups assigned definitions that touch head-to-tail (a terminal station
+ * shared by both) and use the identical theme. Returns groups of two or more.
+ */
+export const getLineMergeSuggestions = (graph: Graph): LineDefinition[][] => {
+    const definitions = (graph.attributes?.lineDefinitions ?? []).filter(line => line.edgeIds.length > 0);
+    const edgeMap = new Map(graph.edges.map(edge => [edge.key!, edge]));
+    const infos = definitions.map(line => {
+        const nodes = new Set(
+            line.edgeIds.flatMap(id => {
+                const edge = edgeMap.get(id);
+                return edge ? [edge.source, edge.target] : [];
+            })
+        );
+        return {
+            line,
+            nodes,
+            theme: themeKey(edgeMap.get(line.edgeIds[0])!),
+            terminals: new Set(getLineTopology(graph, line).startCandidates),
+        };
+    });
+    const parent = new Map(infos.map((_, index) => [index, index]));
+    const findRoot = (index: number): number => {
+        const current = parent.get(index)!;
+        if (current === index) return index;
+        const root = findRoot(current);
+        parent.set(index, root);
+        return root;
+    };
+    for (let i = 0; i < infos.length; i++) {
+        for (let j = i + 1; j < infos.length; j++) {
+            const a = infos[i];
+            const b = infos[j];
+            if (a.theme !== b.theme) continue;
+            const headToTail = [...a.nodes].some(
+                node => b.nodes.has(node) && a.terminals.has(node) && b.terminals.has(node)
+            );
+            if (headToTail) parent.set(findRoot(i), findRoot(j));
+        }
+    }
+    const groups = new Map<number, LineDefinition[]>();
+    infos.forEach((info, index) => {
+        const root = findRoot(index);
+        groups.set(root, [...(groups.get(root) ?? []), info.line]);
+    });
+    return [...groups.values()].filter(group => group.length >= 2);
+};
+
+/** Merges several assigned definitions into one, keeping the first definition's metadata. */
+export const mergeLineDefinitions = (graph: Graph, lineIds: string[]): Graph => {
+    const definitions = graph.attributes?.lineDefinitions ?? [];
+    const targets = lineIds
+        .map(id => definitions.find(item => item.id === id))
+        .filter((item): item is LineDefinition => Boolean(item));
+    if (targets.length < 2) throw new Error('Select at least two lines to merge');
+    const edgeIds = [...new Set(targets.flatMap(item => item.edgeIds))].sort();
+    const merged: LineDefinition = { ...targets[0], edgeIds };
+    const next = [merged, ...definitions.filter(item => !lineIds.includes(item.id))];
+    return reconcileLineDefinitions({
+        ...graph,
+        attributes: { ...graph.attributes, lineDefinitions: next },
     });
 };
 

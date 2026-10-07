@@ -8,13 +8,16 @@ import koTranslation from './translations/ko.json';
 import zhHansTranslation from './translations/zh-Hans.json';
 import zhHantTranslation from './translations/zh-Hant.json';
 
-const savedLanguage = localStorage.getItem(LocalStorageKey.LANGUAGE);
-const initialLanguage = savedLanguage || rmgRuntime.getLanguage();
+const savedLanguage = localStorage.getItem(LocalStorageKey.LANGUAGE) as LanguageCode | null;
+
+if (savedLanguage) {
+    rmgRuntime.setLanguage(savedLanguage);
+}
 
 const i18n = new rmgRuntime.I18nBuilder()
     .use(initReactI18next)
     .withAppName('Rail Map Painter')
-    .withLng(initialLanguage)
+    .withLng(savedLanguage ?? rmgRuntime.getLanguage())
     .withDefaultResource(defaultTranslation)
     .withResource('en', enTranslation)
     .withResource('zh-Hans', zhHansTranslation)

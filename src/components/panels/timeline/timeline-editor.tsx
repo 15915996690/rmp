@@ -8,6 +8,9 @@ import {
     Badge,
     Box,
     Collapse,
+    FormControl,
+    FormLabel,
+    Stack,
     Slider,
     SliderFilledTrack,
     SliderThumb,
@@ -48,6 +51,7 @@ import {
     MdSchedule,
 } from 'react-icons/md';
 import { RmgSidePanel, RmgSidePanelBody, RmgSidePanelHeader } from '@railmapgen/rmg-components';
+import type { SerializedGraph } from 'graphology-types';
 import { useRootDispatch, useRootSelector } from '../../../redux';
 import {
     addLineGroup,
@@ -68,7 +72,7 @@ import {
 import { clearSelected, setSelected } from '../../../redux/runtime/runtime-slice';
 import { setEnableActionDateFormatValidation } from '../../../redux/app/app-slice';
 import { TimelineLine, LineElement, ActionRow, CloseNodeStyle, LineGroup } from '../../../constants/timeline';
-import { Id, NodeId, Theme } from '../../../constants/constants';
+import { Id, NodeId, Theme, EdgeAttributes, GraphAttributes, NodeAttributes } from '../../../constants/constants';
 import { MiscNodeType } from '../../../constants/nodes';
 import { StationType } from '../../../constants/stations';
 import stations from '../../svgs/stations/stations';
@@ -82,6 +86,23 @@ import {
     getActionConstraintState,
 } from '../../../util/timeline';
 import { getActionLineMinimumDuration, getActionLineSuggestedDuration } from '../../../util/video-export';
+import { resolveVirtualNodeToStation } from '../../../util/virtual-node-station';
+import { LineInfoModal } from '../../page-header/line-info-modal';
+import { getLineExports } from '../../../util/line-export';
+import {
+    getLineEndpointsLabel,
+    getLineRoutes,
+    getLineTopology,
+    getStationLabel,
+    LineRoute,
+} from '../../../util/line-definitions';
+import {
+    getLineIntervalDiagram,
+    INTERVAL_PADDING,
+    INTERVAL_ROUTE_Y,
+    INTERVAL_STATION_GAP,
+} from '../../../util/line-interval-diagram';
+import { LineDefinition } from '../../../constants/line-definitions';
 import { getBatchAnchorIndex, isQuickCompleteAction } from '../../../util/action-schedule';
 import ThemeButton from '../theme-button';
 import TimelineColorPicker from './timeline-color-picker';
@@ -118,6 +139,354 @@ const fitSvgViewBox = (svg: SVGSVGElement, padding = 8): string | null => {
     } catch {
         return null;
     }
+};
+
+type IntervalSelection = { key: string; start: number; end: number };
+
+/**
+ * 从已分配线路中选择连续区段的模态框。
+ * 与「修改线路区间」一致的交互：起终点下拉、路径选择弹窗、SVG 区间图拖拽环。
+ */
+const SegmentFromLineModal = ({
+    graph,
+    line,
+    onClose,
+    onApply,
+}: {
+    graph: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
+    line: LineDefinition;
+    onClose: () => void;
+    onApply: (route: LineRoute, start: number, end: number) => void;
+}) => {
+    const { t } = useTranslation();
+    const topology = React.useMemo(() => getLineTopology(graph, line), [graph, line]);
+    const isLoop = topology.type === 'LOOP';
+    const [from, setFrom] = React.useState(line.exportStartStationId || topology.startCandidates[0] || '');
+    const [to, setTo] = React.useState(topology.startCandidates.find(id => id !== from) || from);
+    const [routeIndex, setRouteIndex] = React.useState(0);
+    const [isPathPickerOpen, setIsPathPickerOpen] = React.useState(false);
+    const [selection, setSelection] = React.useState<IntervalSelection>();
+    const routes = React.useMemo(
+        () => getLineRoutes(graph, line, from, isLoop ? from : to),
+        [graph, line, from, to, isLoop]
+    );
+    const route = routes[Math.min(routeIndex, routes.length - 1)];
+    const diagram = React.useMemo(() => route && getLineIntervalDiagram(graph, line, route), [graph, line, route]);
+    const last = (route?.stationIds.length ?? 1) - 1;
+    const end = selection?.key === route?.key ? Math.min(selection?.end ?? last, last) : last;
+    const start = selection?.key === route?.key ? Math.min(selection?.start ?? 0, Math.max(0, end - 1)) : 0;
+    const drag = React.useRef<{ handle: 'start' | 'end'; pointerId: number } | undefined>(undefined);
+    const svgRef = React.useRef<SVGSVGElement>(null);
+    const width = diagram?.width ?? 440;
+
+    const move = (handle: 'start' | 'end', index: number) => {
+        if (!route) return;
+        setSelection({
+            key: route.key,
+            start: handle === 'start' ? Math.max(0, Math.min(index, end - 1)) : start,
+            end: handle === 'end' ? Math.min(last, Math.max(index, start + 1)) : end,
+        });
+    };
+    const swapArc = () => {
+        if (!route || !isLoop) return;
+        const a = route.stationIds[start],
+            b = route.stationIds[end];
+        if (a === b) return;
+        const selected = new Set(route.segments.slice(start, end).flat());
+        const options = getLineRoutes(graph, line, a, a);
+        const index = options.findIndex(option => {
+            const bIndex = option.stationIds.indexOf(b);
+            return (
+                bIndex > 0 &&
+                option.segments
+                    .slice(0, bIndex)
+                    .flat()
+                    .some(id => !selected.has(id))
+            );
+        });
+        if (index < 0) return;
+        setFrom(a);
+        setRouteIndex(index);
+        setSelection({ key: options[index].key, start: 0, end: options[index].stationIds.indexOf(b) });
+    };
+    const handleRing = (kind: 'start' | 'end', index: number, colour: string) => (
+        <g
+            role="slider"
+            tabIndex={0}
+            aria-label={t(`header.lineInfo.${kind === 'start' ? 'rangeStart' : 'rangeEnd'}`)}
+            aria-valuemin={kind === 'start' ? 0 : start + 1}
+            aria-valuemax={kind === 'start' ? end - 1 : last}
+            aria-valuenow={index}
+            aria-valuetext={route ? getStationLabel(graph, route.stationIds[index]) : ''}
+            transform={`translate(${INTERVAL_PADDING + index * INTERVAL_STATION_GAP},${INTERVAL_ROUTE_Y})`}
+            style={{ cursor: 'ew-resize', touchAction: 'none' }}
+            onPointerDown={event => {
+                if (event.button !== 0 || event.isPrimary === false) return;
+                event.preventDefault();
+                drag.current = { handle: kind, pointerId: event.pointerId };
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+            }}
+            onPointerMove={event => {
+                if (drag.current?.handle !== kind || drag.current.pointerId !== event.pointerId || !svgRef.current)
+                    return;
+                const rect = svgRef.current.getBoundingClientRect();
+                if (rect.width)
+                    move(
+                        kind,
+                        Math.round(
+                            (((event.clientX - rect.left) * width) / rect.width - INTERVAL_PADDING) /
+                                INTERVAL_STATION_GAP
+                        )
+                    );
+            }}
+            onPointerUp={event => {
+                drag.current = undefined;
+                event.currentTarget.releasePointerCapture?.(event.pointerId);
+            }}
+            onPointerCancel={() => {
+                drag.current = undefined;
+            }}
+            onLostPointerCapture={() => {
+                drag.current = undefined;
+            }}
+            onKeyDown={event => {
+                if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    move(
+                        kind,
+                        event.key === 'Home'
+                            ? 0
+                            : event.key === 'End'
+                              ? last
+                              : index + (event.key === 'ArrowLeft' ? -1 : 1)
+                    );
+                }
+            }}
+        >
+            <circle r="18" fill="transparent" stroke={colour} strokeWidth="4" />
+            <text y="-33" textAnchor="middle" fill={colour} fontSize="13">
+                {t(`header.lineInfo.${kind === 'start' ? 'rangeStart' : 'rangeEnd'}`)}
+            </text>
+        </g>
+    );
+
+    const pathPicker = (
+        <Modal isOpen={isPathPickerOpen} onClose={() => setIsPathPickerOpen(false)} size="xl" scrollBehavior="inside">
+            <ModalOverlay />
+            <ModalContent>
+                <ModalHeader>{t('header.lineInfo.pickPath')}</ModalHeader>
+                <ModalCloseButton />
+                <ModalBody>
+                    <Stack spacing="2">
+                        {routes.map((option, index) => (
+                            <Button
+                                key={option.key}
+                                size="md"
+                                h="auto"
+                                py="2"
+                                whiteSpace="normal"
+                                variant={index === routeIndex ? 'solid' : 'outline'}
+                                colorScheme="blue"
+                                fontWeight="normal"
+                                onClick={() => {
+                                    setRouteIndex(index);
+                                    setSelection(undefined);
+                                    setIsPathPickerOpen(false);
+                                }}
+                            >
+                                {option.stationIds.map(id => getStationLabel(graph, id)).join('—')}
+                            </Button>
+                        ))}
+                    </Stack>
+                </ModalBody>
+            </ModalContent>
+        </Modal>
+    );
+
+    return (
+        <>
+            <Modal isOpen onClose={onClose} size="4xl" scrollBehavior="inside">
+                <ModalOverlay />
+                <ModalContent>
+                    <ModalHeader>{t('timeline.selectSourceInterval', '选择线路区段')}</ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody>
+                        <Stack spacing="4">
+                            <HStack align="start" flexWrap="wrap">
+                                <FormControl flex="1" minW="160px">
+                                    <FormLabel>
+                                        {t(`header.lineInfo.${isLoop ? 'referenceStation' : 'pathStart'}`)}
+                                    </FormLabel>
+                                    <Select
+                                        value={from}
+                                        onChange={event => {
+                                            setFrom(event.target.value);
+                                            if (event.target.value === to)
+                                                setTo(
+                                                    topology.startCandidates.find(id => id !== event.target.value) || ''
+                                                );
+                                            setRouteIndex(0);
+                                            setSelection(undefined);
+                                        }}
+                                    >
+                                        {topology.startCandidates.map(id => (
+                                            <option key={id} value={id}>
+                                                {getStationLabel(graph, id)}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+                                {!isLoop && (
+                                    <FormControl flex="1" minW="160px">
+                                        <FormLabel>{t('header.lineInfo.pathEnd')}</FormLabel>
+                                        <Select
+                                            value={to}
+                                            onChange={event => {
+                                                setTo(event.target.value);
+                                                setRouteIndex(0);
+                                                setSelection(undefined);
+                                            }}
+                                        >
+                                            {topology.startCandidates
+                                                .filter(id => id !== from)
+                                                .map(id => (
+                                                    <option key={id} value={id}>
+                                                        {getStationLabel(graph, id)}
+                                                    </option>
+                                                ))}
+                                        </Select>
+                                    </FormControl>
+                                )}
+                                {routes.length > 1 && (
+                                    <FormControl flex="1" minW="160px">
+                                        <FormLabel>{t('header.lineInfo.path')}</FormLabel>
+                                        <Button
+                                            size="md"
+                                            w="full"
+                                            h="32px"
+                                            fontWeight="normal"
+                                            px="3"
+                                            textAlign="left"
+                                            justifyContent="space-between"
+                                            aria-label={t('header.lineInfo.pickPath')}
+                                            onClick={() => setIsPathPickerOpen(true)}
+                                        >
+                                            <Text isTruncated>
+                                                {route.stationIds.map(id => getStationLabel(graph, id)).join('—')}
+                                            </Text>
+                                            <MdChevronRight />
+                                        </Button>
+                                    </FormControl>
+                                )}
+                            </HStack>
+                            {topology.type === 'BRANCH' && <Text fontSize="sm">{t('header.lineInfo.branchHelp')}</Text>}
+                            {route && diagram ? (
+                                <Box overflowX="auto" borderWidth="1px" borderRadius="md">
+                                    <svg
+                                        ref={svgRef}
+                                        width={width}
+                                        height={diagram.height}
+                                        viewBox={`0 0 ${width} ${diagram.height}`}
+                                        aria-label={t('header.lineInfo.intervalDiagram')}
+                                        style={{ display: 'block' }}
+                                    >
+                                        {diagram.branches.map(branch => (
+                                            <path
+                                                key={branch.key}
+                                                d={branch.path}
+                                                fill="none"
+                                                stroke={topology.theme[2]}
+                                                strokeWidth="4"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                opacity="0.5"
+                                            />
+                                        ))}
+                                        <line
+                                            x1={INTERVAL_PADDING}
+                                            x2={INTERVAL_PADDING + last * INTERVAL_STATION_GAP}
+                                            y1={INTERVAL_ROUTE_Y}
+                                            y2={INTERVAL_ROUTE_Y}
+                                            stroke={topology.theme[2]}
+                                            strokeWidth="5"
+                                            opacity="0.3"
+                                        />
+                                        <line
+                                            x1={INTERVAL_PADDING + start * INTERVAL_STATION_GAP}
+                                            x2={INTERVAL_PADDING + end * INTERVAL_STATION_GAP}
+                                            y1={INTERVAL_ROUTE_Y}
+                                            y2={INTERVAL_ROUTE_Y}
+                                            stroke={topology.theme[2]}
+                                            strokeWidth="6"
+                                        />
+                                        {diagram.junctions.map(point => (
+                                            <g key={point.id} transform={`translate(${point.x},${point.y})`}>
+                                                {!point.id.startsWith('stn_') && (
+                                                    <circle r="4" fill={topology.theme[2]} />
+                                                )}
+                                                <text x="20" y="-18" fontSize="11" fill="currentColor">
+                                                    {t('header.lineInfo.junction')}
+                                                </text>
+                                            </g>
+                                        ))}
+                                        {diagram.stations.map(point => (
+                                            <g key={point.key} transform={`translate(${point.x},${point.y})`}>
+                                                <circle r="8" fill="white" stroke={topology.theme[2]} strokeWidth="3" />
+                                                <text
+                                                    transform="translate(12,38) rotate(25)"
+                                                    fontSize="12"
+                                                    fill="currentColor"
+                                                >
+                                                    <title>{getStationLabel(graph, point.stationId)}</title>
+                                                    {getStationLabel(graph, point.stationId)}
+                                                </text>
+                                            </g>
+                                        ))}
+                                        {handleRing('start', start, '#3182ce')}
+                                        {handleRing('end', end, '#dd6b20')}
+                                    </svg>
+                                </Box>
+                            ) : (
+                                <Text>{t('header.lineInfo.noPath')}</Text>
+                            )}
+                            {isLoop && (
+                                <Button
+                                    alignSelf="start"
+                                    size="sm"
+                                    onClick={swapArc}
+                                    isDisabled={!route || route.stationIds[start] === route.stationIds[end]}
+                                >
+                                    {t('header.lineInfo.otherArc')}
+                                </Button>
+                            )}
+                            {route && (
+                                <Text>
+                                    {t('header.lineInfo.selection')}: {getStationLabel(graph, route.stationIds[start])}{' '}
+                                    — {getStationLabel(graph, route.stationIds[end])}
+                                </Text>
+                            )}
+                        </Stack>
+                    </ModalBody>
+                    <ModalFooter gap="2">
+                        <Button variant="outline" onClick={onClose}>
+                            {t('cancel')}
+                        </Button>
+                        <Button
+                            colorScheme="blue"
+                            isDisabled={!route}
+                            onClick={() => {
+                                if (route) onApply(route, start, end);
+                            }}
+                        >
+                            {t('confirm')}
+                        </Button>
+                    </ModalFooter>
+                </ModalContent>
+            </Modal>
+            {pathPicker}
+        </>
+    );
 };
 
 export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: TimelineEditorPanelProps) {
@@ -159,39 +528,41 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
         | { step: 'pickingEndNode'; lineId: string; startNode: NodeId; theme: Theme }
     >({ step: 'idle' });
 
-    // 线路内添加线路段
-    const [addingSegmentForGroupId, setAddingSegmentForGroupId] = React.useState<string | null>(null);
-    // 新建线路段时输入的名称
-    const [newSegmentName, setNewSegmentName] = React.useState('');
+    // 从已有线路段复制区间的状态
+    const [addFromLineState, setAddFromLineState] = React.useState<
+        | { step: 'idle' }
+        | { step: 'selectLine'; groupId: string }
+        | { step: 'selectInterval'; groupId: string; sourceLineId: string }
+    >({ step: 'idle' });
+    // 「从线路设置添加线路段」期间缓存导出图与线路导出，
+    // 避免渲染（尤其是拖拽选择环每 ~30ms 触发的重渲染）反复全量 export/拓扑计算
+    const exportedGraphForAdd = React.useMemo(
+        () => (addFromLineState.step === 'idle' ? null : graph.current.export()),
+        [addFromLineState.step, graphRefresh.nodes, graphRefresh.edges]
+    );
+    const lineExportsForAdd = React.useMemo(
+        () => (exportedGraphForAdd ? getLineExports(exportedGraphForAdd) : []),
+        [exportedGraphForAdd]
+    );
     // 元素列表视图中编辑线路段名称的草稿（失焦/回车时提交，避免每次按键 dispatch）
     const [segmentNameDraft, setSegmentNameDraft] = React.useState('');
 
     // 动作行编辑状态
     const [editingActionRow, setEditingActionRow] = React.useState<ActionRow | null>(null);
-    const [isLinesCollapsed, setIsLinesCollapsed] = React.useState(false);
-    const [isActionsCollapsed, setIsActionsCollapsed] = React.useState(true);
+    const [expandedPanel, setExpandedPanel] = React.useState<'lineSettings' | 'lineSegments' | 'actions' | null>(
+        'lineSegments'
+    );
+    const [lineInfoSearch, setLineInfoSearch] = React.useState('');
 
-    const toggleLinesCollapsed = () => {
-        setIsLinesCollapsed(value => {
-            const nextValue = !value;
-            if (!nextValue) setIsActionsCollapsed(true);
-            return nextValue;
-        });
-    };
-
-    const toggleActionsCollapsed = () => {
-        setIsActionsCollapsed(value => {
-            const nextValue = !value;
-            if (!nextValue) setIsLinesCollapsed(true);
-            return nextValue;
-        });
+    const togglePanel = (panel: 'lineSettings' | 'lineSegments' | 'actions') => {
+        setExpandedPanel(current => (current === panel ? null : panel));
     };
 
     // 新建动作状态
     const [newActionRemark, setNewActionRemark] = React.useState('');
     const [newActionType, setNewActionType] = React.useState<ActionRow['actionType']>('open');
     const [newActionLineSegmentId, setNewActionLineSegmentId] = React.useState('');
-    const [newActionDuration, setNewActionDuration] = React.useState('1');
+    const [newActionDuration, setNewActionDuration] = React.useState('2');
     const [newNodeAnimationDuration, setNewNodeAnimationDuration] = React.useState('1');
     const [newActionWithPrevious, setNewActionWithPrevious] = React.useState(false);
     const [newActionQuickComplete, setNewActionQuickComplete] = React.useState(false);
@@ -457,7 +828,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
             if (!id.startsWith('stn_') && !id.startsWith('misc_node_')) return;
             prevSelectedRef.current = selected;
 
-            const startNode = firstId as NodeId;
+            const startNode = resolveVirtualNodeToStation(graph.current, firstId as NodeId);
             const themes = findThemesAtNode(graph.current, startNode);
             if (themes.length === 0) {
                 // 没有主题，直接作为单个节点添加
@@ -484,7 +855,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
             if (!id.startsWith('stn_') && !id.startsWith('misc_node_')) return;
             prevSelectedRef.current = selected;
 
-            const endNode = firstId as NodeId;
+            const endNode = resolveVirtualNodeToStation(graph.current, firstId as NodeId);
             const { lineId, startNode, theme } = segmentPickState;
             const path = findPathByTheme(graph.current, startNode, endNode, theme);
             if (path) {
@@ -578,12 +949,57 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
         dispatch(
             addTimelineLine({
                 groupId,
-                text: newSegmentName.trim() || t('timeline.newSegment', '新线路段'),
+                text: t('timeline.newSegment', '新线路段'),
                 elements: [],
             })
         );
-        setNewSegmentName('');
-        setAddingSegmentForGroupId(null);
+    };
+
+    const handleSelectSourceLine = (groupId: string, sourceLineId: string) => {
+        // 可选线路来自 lineExportsForAdd，能渲染成按钮即有效，无需再全量计算一次
+        setAddFromLineState({ step: 'selectInterval', groupId, sourceLineId });
+    };
+
+    const handleCreateSegmentFromInterval = (route: LineRoute, start: number, end: number) => {
+        if (addFromLineState.step !== 'selectInterval') return;
+        const sourceEntry = lineExportsForAdd.find(entry => entry.line.id === addFromLineState.sourceLineId);
+        if (!sourceEntry || sourceEntry.error) return;
+        if (start < 0 || end >= route.stationIds.length || start >= end) return;
+        const path: string[] = [route.nodeIds[0]];
+        for (let index = 1; index < route.nodeIds.length; index += 1) {
+            const from = route.nodeIds[index - 1];
+            const to = route.nodeIds[index];
+            const edgeId = route.segments.flat().find(id => {
+                if (!graph.current.hasEdge(id)) return false;
+                const [a, b] = graph.current.extremities(id);
+                return (a === from && b === to) || (a === to && b === from);
+            });
+            if (!edgeId) continue;
+            path.push(edgeId, to);
+        }
+        const fullElements = calculateAutoReverseForPath(graph.current, path as Id[]).map(element => ({
+            id: element.id,
+            ...(element.reverse ? { reverse: true } : {}),
+        }));
+        const stationIndexes = fullElements
+            .map((element, index) => (element.id.startsWith('stn_') ? index : -1))
+            .filter(index => index >= 0);
+        const elements = fullElements.slice(stationIndexes[start], stationIndexes[end] + 1);
+        const stationNames = route.stationIds
+            .slice(start, end + 1)
+            .map(id => getNodeDisplayName(graph.current, id as NodeId).trim())
+            .filter(Boolean);
+        const firstStationName = stationNames[0] ?? '';
+        const lastStationName = stationNames[stationNames.length - 1] ?? '';
+        const sourceName = sourceEntry.line.name[0].trim();
+        const text =
+            firstStationName && lastStationName
+                ? sourceName
+                    ? `${sourceName}（${firstStationName}-${lastStationName}）`
+                    : `${firstStationName}-${lastStationName}`
+                : t('timeline.newSegment', '新线路段');
+        dispatch(addTimelineLine({ groupId: addFromLineState.groupId, text, elements }));
+        setAddFromLineState({ step: 'idle' });
     };
 
     const handleRemoveSegment = (id: string) => {
@@ -800,27 +1216,27 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
         if (!segment || !group) return '';
 
         let endpointText = '';
-        const firstElement = segment.elements[0];
-        const lastElement = segment.elements[segment.elements.length - 1];
-        if (firstElement?.id.startsWith('stn_') && lastElement?.id.startsWith('stn_')) {
-            const firstNode = firstElement.id as NodeId;
-            const lastNode = lastElement.id as NodeId;
-            const firstAttributes = graph.current.hasNode(firstNode)
-                ? graph.current.getNodeAttributes(firstNode)
-                : undefined;
-            const lastAttributes = graph.current.hasNode(lastNode)
-                ? graph.current.getNodeAttributes(lastNode)
-                : undefined;
-            const firstName =
-                (firstAttributes?.isStation ?? firstNode.startsWith('stn_'))
-                    ? getNodeDisplayName(graph.current, firstNode)
-                    : '';
-            const lastName =
-                (lastAttributes?.isStation ?? lastNode.startsWith('stn_'))
-                    ? getNodeDisplayName(graph.current, lastNode)
-                    : '';
-            if (firstName && lastName) endpointText = `(${firstName}-${lastName})`;
-        }
+        const stationNodes = segment.elements
+            .map(element => element.id as NodeId)
+            .filter(nodeId => {
+                if (!graph.current.hasNode(nodeId)) return false;
+                const attributes = graph.current.getNodeAttributes(nodeId);
+                return attributes.isStation ?? nodeId.startsWith('stn_');
+            });
+        const firstNode = stationNodes[0];
+        const lastNode = stationNodes[stationNodes.length - 1];
+        const getNamedStation = (nodeId: NodeId | undefined): string => {
+            if (!nodeId || !graph.current.hasNode(nodeId)) return '';
+            const attributes = graph.current.getNodeAttributes(nodeId);
+            const station = graph.current.getNodeAttribute(nodeId, attributes.type) as
+                | { names?: unknown[] }
+                | undefined;
+            const name = station?.names?.find(value => typeof value === 'string' && value.trim());
+            return typeof name === 'string' ? name.trim() : '';
+        };
+        const firstName = getNamedStation(firstNode);
+        const lastName = getNamedStation(lastNode);
+        if (firstName && lastName) endpointText = `(${firstName}-${lastName})`;
 
         return `${group.text}${endpointText}${actionType === 'open' ? '开通运营' : '停止对外服务'}`;
     };
@@ -970,7 +1386,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                 remark: '',
                 actionType: sourceRow.actionType,
                 actionLineId: sourceRow.actionLineId,
-                actionDuration: undefined,
+                actionDuration: sourceRow.actionType === 'wait' ? 2 : undefined,
                 withPrevious: sourceRow.withPrevious,
                 quickComplete:
                     sourceRow.actionType === 'open' || sourceRow.actionType === 'close'
@@ -1220,9 +1636,12 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                             borderTop="1px solid"
                             borderColor="gray.200"
                             pt={2}
-                            flex={editingElementsForLineId || isActionsCollapsed ? 1 : undefined}
-                            display={editingElementsForLineId || isActionsCollapsed ? 'flex' : undefined}
-                            flexDirection={editingElementsForLineId || isActionsCollapsed ? 'column' : undefined}
+                            flex={editingElementsForLineId || expandedPanel !== 'lineSegments' ? 1 : undefined}
+                            display={editingElementsForLineId || expandedPanel !== 'lineSegments' ? 'flex' : undefined}
+                            flexDirection={
+                                editingElementsForLineId || expandedPanel !== 'lineSegments' ? 'column' : undefined
+                            }
+                            order={2}
                         >
                             <Flex
                                 justify="space-between"
@@ -1233,31 +1652,31 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                 borderRadius="md"
                                 cursor="pointer"
                                 _hover={{ bg: 'gray.100' }}
-                                onClick={toggleLinesCollapsed}
+                                onClick={() => togglePanel('lineSegments')}
                             >
                                 <Text as="b" fontSize="sm">
                                     {editingElementsForLineId
                                         ? t('timeline.elements', '线路段元素')
-                                        : t('timeline.lines', '线路列表')}
+                                        : t('timeline.lineSegments', '线路段设置')}
                                 </Text>
                                 <IconButton
                                     size="sm"
                                     variant="ghost"
                                     icon={
-                                        isLinesCollapsed ? (
+                                        expandedPanel !== 'lineSegments' ? (
                                             <MdChevronRight size="1.5em" />
                                         ) : (
                                             <MdChevronLeft size="1.5em" />
                                         )
                                     }
                                     aria-label={
-                                        isLinesCollapsed
-                                            ? t('timeline.expandLines', '展开线路区域')
-                                            : t('timeline.collapseLines', '折叠线路区域')
+                                        expandedPanel !== 'lineSegments'
+                                            ? t('timeline.expandLines', '展开线路段设置')
+                                            : t('timeline.collapseLines', '折叠线路段设置')
                                     }
                                 />
                             </Flex>
-                            <Collapse in={!isLinesCollapsed} animateOpacity>
+                            <Collapse in={expandedPanel === 'lineSegments'} animateOpacity>
                                 {editingElementsForLineId && editingLineData ? (
                                     /* 元素列表编辑视图 */
                                     <VStack spacing={2} align="stretch" height="100%" minH={0}>
@@ -1564,7 +1983,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                     <>
                                         <Flex justify="space-between" align="center" mb={2}>
                                             <Text as="b" fontSize="sm">
-                                                {t('timeline.lines', '线路列表')}
+                                                {t('timeline.lineSegments', '线路段设置')}
                                             </Text>
                                         </Flex>
 
@@ -1745,66 +2164,53 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                                                     ))}
 
                                                                     {/* 添加线路段 */}
-                                                                    {addingSegmentForGroupId === group.id ? (
-                                                                        <VStack spacing={1} align="stretch">
-                                                                            <Input
-                                                                                size="xs"
-                                                                                autoFocus
-                                                                                value={newSegmentName}
-                                                                                onChange={e =>
-                                                                                    setNewSegmentName(e.target.value)
-                                                                                }
-                                                                                onKeyDown={e => {
-                                                                                    if (e.key === 'Enter') {
-                                                                                        handleAddSegment(group.id);
-                                                                                    } else if (e.key === 'Escape') {
-                                                                                        setNewSegmentName('');
-                                                                                        setAddingSegmentForGroupId(
-                                                                                            null
-                                                                                        );
-                                                                                    }
-                                                                                }}
-                                                                                placeholder={t(
-                                                                                    'timeline.segmentName',
-                                                                                    '线路段名称'
-                                                                                )}
-                                                                            />
-                                                                            <HStack spacing={1}>
-                                                                                <Button
-                                                                                    size="xs"
-                                                                                    onClick={() =>
-                                                                                        handleAddSegment(group.id)
-                                                                                    }
-                                                                                >
-                                                                                    {t('confirm', '确定')}
-                                                                                </Button>
-                                                                                <Button
-                                                                                    size="xs"
-                                                                                    variant="outline"
-                                                                                    onClick={() => {
-                                                                                        setNewSegmentName('');
-                                                                                        setAddingSegmentForGroupId(
-                                                                                            null
-                                                                                        );
-                                                                                    }}
-                                                                                >
-                                                                                    {t('cancel', '取消')}
-                                                                                </Button>
-                                                                            </HStack>
-                                                                        </VStack>
-                                                                    ) : (
+                                                                    <HStack spacing={1} align="stretch">
                                                                         <Button
+                                                                            flex={1}
                                                                             size="xs"
-                                                                            variant="ghost"
+                                                                            variant="outline"
                                                                             leftIcon={<MdAdd />}
-                                                                            onClick={() => {
-                                                                                setNewSegmentName('');
-                                                                                setAddingSegmentForGroupId(group.id);
-                                                                            }}
+                                                                            iconSpacing={1}
+                                                                            h="auto"
+                                                                            minH="24px"
+                                                                            py={1}
+                                                                            whiteSpace="normal"
+                                                                            wordBreak="break-all"
+                                                                            lineHeight="1.2"
+                                                                            fontSize="11px"
+                                                                            onClick={() => handleAddSegment(group.id)}
                                                                         >
-                                                                            {t('timeline.addSegment', '添加线路段')}
+                                                                            {t(
+                                                                                'timeline.newBlankSegment',
+                                                                                '新建空白线路段'
+                                                                            )}
                                                                         </Button>
-                                                                    )}
+                                                                        <Button
+                                                                            flex={1}
+                                                                            size="xs"
+                                                                            variant="outline"
+                                                                            leftIcon={<MdAdd />}
+                                                                            iconSpacing={1}
+                                                                            h="auto"
+                                                                            minH="24px"
+                                                                            py={1}
+                                                                            whiteSpace="normal"
+                                                                            wordBreak="break-all"
+                                                                            lineHeight="1.2"
+                                                                            fontSize="11px"
+                                                                            onClick={() =>
+                                                                                setAddFromLineState({
+                                                                                    step: 'selectLine',
+                                                                                    groupId: group.id,
+                                                                                })
+                                                                            }
+                                                                        >
+                                                                            {t(
+                                                                                'timeline.addFromLineSettings',
+                                                                                '从线路设置中添加线路段'
+                                                                            )}
+                                                                        </Button>
+                                                                    </HStack>
                                                                 </VStack>
                                                             </>
                                                         )}
@@ -1822,15 +2228,66 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                             </Collapse>
                         </Box>
 
+                        {/* ===== 线路设置 ===== */}
+                        {!editingElementsForLineId && (
+                            <Box borderTop="1px solid" borderColor="gray.200" pt={2} order={1}>
+                                <Flex
+                                    justify="space-between"
+                                    align="center"
+                                    mb={2}
+                                    minH="40px"
+                                    px={2}
+                                    borderRadius="md"
+                                    cursor="pointer"
+                                    _hover={{ bg: 'gray.100' }}
+                                    onClick={() => togglePanel('lineSettings')}
+                                >
+                                    <Text as="b" fontSize="md">
+                                        {t('timeline.lineSettings', '线路设置')}
+                                    </Text>
+                                    <IconButton
+                                        size="sm"
+                                        variant="ghost"
+                                        icon={
+                                            expandedPanel !== 'lineSettings' ? (
+                                                <MdChevronRight size="1.5em" />
+                                            ) : (
+                                                <MdChevronLeft size="1.5em" />
+                                            )
+                                        }
+                                        aria-label={
+                                            expandedPanel !== 'lineSettings'
+                                                ? t('timeline.expandLineSettings', '展开线路设置')
+                                                : t('timeline.collapseLineSettings', '折叠线路设置')
+                                        }
+                                    />
+                                </Flex>
+                                <Collapse in={expandedPanel === 'lineSettings'} animateOpacity>
+                                    <Box p={2} overflowY="auto" maxH="100%">
+                                        <Input
+                                            size="sm"
+                                            mb={3}
+                                            value={lineInfoSearch}
+                                            onChange={event => setLineInfoSearch(event.target.value)}
+                                            placeholder={t('timeline.searchLines', '搜索线路')}
+                                            aria-label={t('timeline.searchLines', '搜索线路')}
+                                        />
+                                        <LineInfoModal embedded search={lineInfoSearch} />
+                                    </Box>
+                                </Collapse>
+                            </Box>
+                        )}
+
                         {/* ===== 下半区域：动作列表 ===== */}
                         {!editingElementsForLineId && (
                             <Box
                                 borderTop="1px solid"
                                 borderColor="gray.200"
                                 pt={2}
-                                flex={isLinesCollapsed ? 1 : undefined}
-                                display={isLinesCollapsed ? 'flex' : undefined}
-                                flexDirection={isLinesCollapsed ? 'column' : undefined}
+                                order={3}
+                                flex={expandedPanel !== 'actions' ? 1 : undefined}
+                                display={expandedPanel !== 'actions' ? 'flex' : undefined}
+                                flexDirection={expandedPanel !== 'actions' ? 'column' : undefined}
                             >
                                 <Flex
                                     justify="space-between"
@@ -1841,30 +2298,30 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                     borderRadius="md"
                                     cursor="pointer"
                                     _hover={{ bg: 'gray.100' }}
-                                    onClick={toggleActionsCollapsed}
+                                    onClick={() => togglePanel('actions')}
                                 >
                                     <Text as="b" fontSize="sm">
-                                        {t('timeline.actions', '动作列表')}
+                                        {t('timeline.actionSettings', '动作设置')}
                                     </Text>
                                     <IconButton
                                         size="sm"
                                         variant="ghost"
                                         icon={
-                                            isActionsCollapsed ? (
+                                            expandedPanel !== 'actions' ? (
                                                 <MdChevronRight size="1.5em" />
                                             ) : (
                                                 <MdChevronLeft size="1.5em" />
                                             )
                                         }
                                         aria-label={
-                                            isActionsCollapsed
-                                                ? t('timeline.expandActions', '展开动作区域')
-                                                : t('timeline.collapseActions', '折叠动作区域')
+                                            expandedPanel !== 'actions'
+                                                ? t('timeline.expandActions', '展开动作设置')
+                                                : t('timeline.collapseActions', '折叠动作设置')
                                         }
                                     />
                                 </Flex>
 
-                                <Collapse in={!isActionsCollapsed} animateOpacity>
+                                <Collapse in={expandedPanel === 'actions'} animateOpacity>
                                     {/* 添加动作 */}
                                     <VStack spacing={1} p={2} bg={rowBgColor} borderRadius="md" mb={2}>
                                         <Input
@@ -1933,7 +2390,9 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                                     ) {
                                                         dispatch(setUnsavedDate(''));
                                                     }
-                                                    if (nextType === 'open' || nextType === 'close') {
+                                                    if (nextType === 'wait') {
+                                                        setNewActionDuration('2');
+                                                    } else if (nextType === 'open' || nextType === 'close') {
                                                         setNewActionDuration(
                                                             getSuggestedActionDuration(
                                                                 newActionLineSegmentId,
@@ -1991,7 +2450,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                                                   ? groups.find(gr => gr.id === seg.groupId)
                                                                   : undefined;
                                                               return g
-                                                                  ? `${g.text} > ${seg.text}`
+                                                                  ? `${g.text} > ${seg?.text}`
                                                                   : t('timeline.action.selectSegment', '选择线路段');
                                                           })()
                                                         : t('timeline.action.selectSegment', '选择线路段')}
@@ -2354,7 +2813,7 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                                                                                     )
                                                                                                   : undefined;
                                                                                               return g
-                                                                                                  ? `${g.text} > ${seg.text}`
+                                                                                                  ? `${g.text} > ${seg?.text}`
                                                                                                   : t(
                                                                                                         'timeline.action.selectSegment',
                                                                                                         '选择线路段'
@@ -2417,7 +2876,10 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                                                                                             : editingActionRow.quickComplete
                                                                                               ? 1
                                                                                               : (editingActionRow.actionDuration ??
-                                                                                                '')
+                                                                                                (editingActionRow.actionType ===
+                                                                                                'wait'
+                                                                                                    ? 2
+                                                                                                    : ''))
                                                                                     }
                                                                                     isDisabled={
                                                                                         editingActionRow.actionType ===
@@ -2742,6 +3204,66 @@ export default function TimelineEditorPanel({ isOpen, onClose, zIndex }: Timelin
                     </VStack>
                 </RmgSidePanelBody>
             </Box>
+
+            {/* 从线路中添加：选择源线路 */}
+            <Modal
+                isOpen={addFromLineState.step === 'selectLine'}
+                onClose={() => setAddFromLineState({ step: 'idle' })}
+                size="sm"
+            >
+                <ModalOverlay />
+                <ModalContent h="90vh" maxH="90vh">
+                    <ModalHeader>{t('timeline.selectSourceLine', '选择已分配线路')}</ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody display="flex" flexDirection="column" overflow="hidden">
+                        <VStack align="stretch" spacing={2} flex={1} overflowY="auto">
+                            {lineExportsForAdd
+                                .filter(entry => !entry.error && entry.topology.stationIds.length >= 2)
+                                .map(entry => (
+                                    <Button
+                                        key={entry.line.id}
+                                        justifyContent="flex-start"
+                                        variant="outline"
+                                        onClick={() =>
+                                            handleSelectSourceLine(
+                                                (addFromLineState as { groupId: string }).groupId,
+                                                entry.line.id
+                                            )
+                                        }
+                                    >
+                                        <Badge bg={entry.topology.theme[2]} color="white" mr={2} flexShrink={0}>
+                                            {entry.line.name[0].trim() ||
+                                                entry.line.name[1].trim() ||
+                                                (entry.topology.theme[0] === 'other' &&
+                                                entry.topology.theme[1] === 'other'
+                                                    ? entry.topology.theme[2]
+                                                    : entry.topology.theme[1])}
+                                        </Badge>
+                                        {getLineEndpointsLabel(exportedGraphForAdd!, entry.line)}
+                                    </Button>
+                                ))}
+                        </VStack>
+                    </ModalBody>
+                </ModalContent>
+            </Modal>
+
+            {/* 从线路中添加：选择连续区段（SVG 区间图拖拽选择） */}
+            {addFromLineState.step === 'selectInterval' &&
+                (() => {
+                    const sourceEntry = lineExportsForAdd.find(
+                        entry => entry.line.id === addFromLineState.sourceLineId
+                    );
+                    if (!sourceEntry || sourceEntry.error || !exportedGraphForAdd) return null;
+                    return (
+                        <SegmentFromLineModal
+                            key={sourceEntry.line.id}
+                            graph={exportedGraphForAdd}
+                            line={sourceEntry.line}
+                            onClose={() => setAddFromLineState({ step: 'idle' })}
+                            onApply={handleCreateSegmentFromInterval}
+                        />
+                    );
+                })()}
 
             {/* 目标线路段选择模态框 */}
             <Modal isOpen={!!addElementModal} onClose={() => setAddElementModal(null)} size="sm">
