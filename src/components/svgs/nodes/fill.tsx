@@ -4,6 +4,7 @@ import { MonoColour } from '@railmapgen/rmg-palette-resources';
 import { nanoid } from 'nanoid';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { SameStyleLineEndpointOverlay } from '../common/same-style-line-endpoint-overlay';
 import { AttrsProps, CityCode, LineId, MiscNodeId, NodeAttributes } from '../../../constants/constants';
 import { LinePathType, LineStyleType } from '../../../constants/lines';
 import { MiscNodeType, Node, NodeComponentProps } from '../../../constants/nodes';
@@ -16,7 +17,6 @@ import { generateClosedPath } from '../../../util/generate-closed-path';
 import { findShortestClosedPath } from '../../../util/graph-find-shortest-closed-path';
 import { ColorAttribute, ColorField } from '../../panels/details/color-field';
 import { linePaths } from '../lines/lines';
-import { useSvgRenderContext } from '../../svg-render-context';
 
 const Fill = (props: NodeComponentProps<FillAttributes>) => {
     const { id, x, y, attrs, handlePointerDown, handlePointerMove, handlePointerUp } = props;
@@ -26,7 +26,8 @@ const Fill = (props: NodeComponentProps<FillAttributes>) => {
         selectedPatterns = defaultFillAttributes.selectedPatterns,
     } = attrs ?? defaultFillAttributes;
 
-    const { graph, graphRefresh } = useSvgRenderContext();
+    const { refresh } = useRootSelector(state => state.runtime);
+    const graph = window.graph!;
 
     const onPointerDown = React.useCallback(
         (e: React.PointerEvent<SVGElement>) => handlePointerDown(id, e),
@@ -41,11 +42,11 @@ const Fill = (props: NodeComponentProps<FillAttributes>) => {
         [id, handlePointerUp]
     );
 
-    const closedPath = React.useMemo(() => findShortestClosedPath(graph, id), [graph, id, graphRefresh]);
+    const closedPath = React.useMemo(() => findShortestClosedPath(graph, id), [graph, id, refresh]);
     const fillPath = React.useMemo(() => {
         if (!closedPath) return undefined;
         return generateClosedPath(graph, closedPath.nodes, closedPath.edges);
-    }, [closedPath, graph]);
+    }, [closedPath]);
 
     const pattern = { width: 60, height: 60 };
     const patternColor = getDynamicContrastColor(color[2], opacity);
@@ -127,13 +128,38 @@ export const defaultFillAttributes: FillAttributes = {
     selectedPatterns: ['logo'],
 };
 
+type FillShape = 'square' | 'triangle' | 'circle';
+type FillShapeLinePathType = LinePathType.Diagonal | LinePathType.Perpendicular | LinePathType.Bezier;
+
+const getFillShapeLinePathType = (shape: FillShape, mapEnabled: boolean): FillShapeLinePathType =>
+    mapEnabled ? LinePathType.Bezier : shape === 'triangle' ? LinePathType.Diagonal : LinePathType.Perpendicular;
+
+const makeFillShapeLinePathAttrs = (shape: FillShape, type: FillShapeLinePathType, edgeIndex: number, size: number) => {
+    if (type === LinePathType.Bezier) {
+        return {
+            ...structuredClone(linePaths[LinePathType.Bezier].defaultAttrs),
+            along: 0.5,
+            // Straight Beziers preserve polygon edges. Four outward quadratic
+            // segments reproduce the existing rounded circle construction.
+            normal: shape === 'circle' ? -0.5 : 0,
+        };
+    }
+
+    const attrs = structuredClone(linePaths[type].defaultAttrs);
+    if (shape === 'circle') {
+        if (edgeIndex % 2 === 0) attrs.startFrom = 'to';
+        attrs.roundCornerFactor = size;
+    }
+    return attrs;
+};
+
 const fillAttrsComponent = (props: AttrsProps<FillAttributes>) => {
     const { id, attrs, handleAttrsUpdate } = props;
     const dispatch = useRootDispatch();
     const {
         preference: { autoParallel, timelineFeatureEnabled },
     } = useRootSelector(state => state.app);
-    const { mapEnabled } = useRootSelector(state => state.param.present);
+    const mapEnabled = useRootSelector(state => state.param.present.mapEnabled);
     const { refresh, theme } = useRootSelector(state => state.runtime);
     const { t } = useTranslation();
 
@@ -146,7 +172,9 @@ const fillAttrsComponent = (props: AttrsProps<FillAttributes>) => {
 
     const hasClosedPath = React.useMemo(() => !!findShortestClosedPath(graph, id as MiscNodeId), [graph, id, refresh]);
 
-    const handleCreateShape = (shape: 'square' | 'triangle' | 'circle') => {
+    const handleCreateShape = (shape: FillShape) => {
+        const type = getFillShapeLinePathType(shape, mapEnabled);
+
         const currentNodeAttrs = graph.getNodeAttributes(id);
         const { x, y } = currentNodeAttrs;
         const size = 200; // The size of the shape to create
@@ -213,23 +241,18 @@ const fillAttrsComponent = (props: AttrsProps<FillAttributes>) => {
             const source = nodeIds[i];
             const target = nodeIds[(i + 1) % nodeIds.length]; // Wrap around to close the loop
             const newLineId: LineId = `line_${nanoid(10)}`;
-            const type = shape === 'triangle' ? LinePathType.Diagonal : LinePathType.Perpendicular;
-            const attrs = structuredClone(linePaths[type].defaultAttrs); // deep copy to prevent mutual reference
-            if (shape === 'circle') {
-                if (i % 2 === 0) attrs.startFrom = 'to';
-                attrs.roundCornerFactor = size;
-            }
+            const pathAttrs = makeFillShapeLinePathAttrs(shape, type, i, size);
             graph.addDirectedEdgeWithKey(newLineId, source, target, {
                 visible: true,
                 zIndex: 0,
                 type,
-                [type]: attrs,
+                [type]: pathAttrs,
                 style: LineStyleType.SingleColor,
                 [LineStyleType.SingleColor]: { color: theme },
                 reconcileId: '',
                 parallelIndex: autoParallel ? 0 : -1,
             });
-            // 填充形状生成的线段同样遵循双视图开启时的实际地图里程自动填充规则。
+            // [fork 定制] 填充形状生成的线段遵循双视图开启时的实际地图里程自动填充规则。
             if (mapEnabled && timelineFeatureEnabled) {
                 const mileage = getEdgeMileageInKilometers(graph, newLineId);
                 if (Number.isFinite(mileage) && mileage > 0) {
@@ -321,6 +344,7 @@ const fillIcon = (
 
 const fill: Node<FillAttributes> = {
     component: Fill,
+    overlayComponent: SameStyleLineEndpointOverlay,
     icon: fillIcon,
     defaultAttrs: defaultFillAttributes,
     attrsComponent: fillAttrsComponent,

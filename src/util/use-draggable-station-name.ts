@@ -1,7 +1,9 @@
 import React from 'react';
-import { useSvgRenderContext } from '../components/svg-render-context';
 import { StnId } from '../constants/constants';
 import { StationAttributes, StationType } from '../constants/stations';
+import { useRootDispatch, useRootSelector } from '../redux';
+import { saveGraph } from '../redux/param/param-slice';
+import { refreshNodesThunk } from '../redux/runtime/runtime-slice';
 
 type PreciseNameOffsetsDrivenAttrs = Pick<StationAttributes, 'preciseNameOffsets'>;
 
@@ -41,21 +43,36 @@ interface DragState {
     initialLayout: NameLayout;
 }
 
+const useStationAttrsUpdate = <T extends StationAttributes>(id: StnId, type: StationType) => {
+    const dispatch = useRootDispatch();
+
+    return React.useCallback(
+        (nextAttrs: T) => {
+            window.graph.mergeNodeAttributes(id, { [type]: nextAttrs });
+            dispatch(saveGraph(window.graph.export()));
+            dispatch(refreshNodesThunk());
+        },
+        [dispatch, id, type]
+    );
+};
+
 export const useDraggableStationName = <T extends StationAttributes>(
     id: StnId,
     type: StationType,
     fallbackLayout: NameLayout
 ) => {
-    const renderContext = useSvgRenderContext();
-    const { selected, mode, svgViewBoxZoom = 100, updateStationAttributes } = renderContext;
+    const handleAttrsUpdate = useStationAttrsUpdate<T>(id, type);
+    const selected = useRootSelector(state => state.runtime.selected);
+    const mode = useRootSelector(state => state.runtime.mode);
+    const svgViewBoxZoom = useRootSelector(state => state.param.present.svgViewBoxZoom);
 
     const dragRef = React.useRef<DragState | null>(null);
     const [previewPreciseNameOffsets, setPreviewPreciseNameOffsets] = React.useState<NameLayout | null>(null);
 
-    const canDrag = !!updateStationAttributes && mode === 'free' && !!selected?.has(id);
+    const canDrag = mode === 'free' && selected.has(id);
     const getCurrentAttrs = React.useCallback(
-        () => renderContext.graph.getNodeAttribute(id, type) as unknown as T,
-        [renderContext, id, type]
+        () => window.graph.getNodeAttribute(id, type) as unknown as T,
+        [id, type]
     );
 
     const onPointerDown = React.useCallback(
@@ -119,7 +136,7 @@ export const useDraggableStationName = <T extends StationAttributes>(
             if (deltaX === 0 && deltaY === 0) return;
 
             const currentAttrs = getCurrentAttrs();
-            updateStationAttributes?.(id, type, {
+            handleAttrsUpdate({
                 ...currentAttrs,
                 preciseNameOffsets: {
                     ...nextLayout,
@@ -127,7 +144,7 @@ export const useDraggableStationName = <T extends StationAttributes>(
                 },
             });
         },
-        [getCurrentAttrs, id, svgViewBoxZoom, type, updateStationAttributes]
+        [getCurrentAttrs, handleAttrsUpdate, svgViewBoxZoom]
     );
 
     const onPointerCancel = React.useCallback((e: React.PointerEvent<SVGGElement>) => {

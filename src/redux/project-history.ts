@@ -4,7 +4,7 @@ import {
     applyRedoAction,
     applyUndoAction,
     ParamGraph,
-    ProjectReplacement,
+    ProjectSnapshot,
     replaceProjectState,
 } from './param/param-slice';
 import { undoTimeline, redoTimeline } from './timeline/timeline-slice';
@@ -35,7 +35,7 @@ const refreshGraphState = (dispatch: RootDispatch) => {
  * Replaces the live graph before committing project history so a malformed
  * graph cannot leave Redux pointing at a project that failed to open.
  */
-export const replaceProject = (project: ProjectReplacement) => (dispatch: RootDispatch, getState: () => RootState) => {
+export const replaceProject = (project: ProjectSnapshot) => (dispatch: RootDispatch) => {
     replaceWindowGraph(project.graph);
     dispatch(replaceProjectState(project));
     dispatch(resetTransientInteractionState());
@@ -47,7 +47,8 @@ export const undoAction = () => (dispatch: RootDispatch, getState: () => RootSta
     const state = getState();
     const timelineEntry = state.timeline.undoStack.at(-1);
     const paramEntry = state.param.past.at(-1);
-    if (timelineEntry && (!paramEntry || timelineEntry.order > paramEntry.order)) {
+    if (timelineEntry && (!paramEntry || timelineEntry.order > (paramEntry.order ?? 0))) {
+        if (timelineEntry.baseGraph) replaceWindowGraph(timelineEntry.baseGraph as ParamGraph);
         dispatch(undoTimeline());
         return refreshGraphState(dispatch);
     }
@@ -66,7 +67,8 @@ export const redoAction = () => (dispatch: RootDispatch, getState: () => RootSta
     const state = getState();
     const timelineEntry = state.timeline.redoStack.at(-1);
     const paramEntry = state.param.future[0];
-    if (timelineEntry && (!paramEntry || timelineEntry.order > paramEntry.order)) {
+    if (timelineEntry && (!paramEntry || timelineEntry.order > (paramEntry.order ?? 0))) {
+        if (timelineEntry.baseGraph) replaceWindowGraph(timelineEntry.baseGraph as ParamGraph);
         dispatch(redoTimeline());
         return refreshGraphState(dispatch);
     }

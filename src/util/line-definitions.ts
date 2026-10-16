@@ -1,6 +1,7 @@
+import { MonoColour } from '@railmapgen/rmg-palette-resources';
 import { SerializedGraph } from 'graphology-types';
 import { nanoid } from 'nanoid';
-import { EdgeAttributes, GraphAttributes, NodeAttributes, Theme } from '../constants/constants';
+import { CityCode, EdgeAttributes, GraphAttributes, NodeAttributes, Theme } from '../constants/constants';
 import { LineDefinition } from '../constants/line-definitions';
 import i18n from '../i18n/config';
 import { resolveVirtualNodeReferences } from './virtual-node-station';
@@ -21,13 +22,25 @@ export const emptyLineDefinition = (edgeIds: string[]): LineDefinition => ({
     exportStartStationId: '',
 });
 
+/**
+ * Hex colours are case-insensitive: `#E3002B` and `#e3002b` are the same colour.
+ * Line badge nodes and edges may carry either casing, so every theme used for
+ * grouping/matching/auto-naming must be normalized first.
+ */
+export const normalizeTheme = (theme: Theme): Theme => [
+    theme[0],
+    theme[1],
+    theme[2].toLowerCase() as Theme[2],
+    theme[3].toLowerCase() as Theme[3],
+];
+
 /** Matches the single-theme styles used by the RMG converter without importing React registries. */
 export const getLineTheme = (edge: Edge | undefined): Theme | undefined => {
     if (!edge) return undefined;
     const attrs = edge.attributes;
     const color = (attrs?.[attrs.style] as { color?: Theme } | undefined)?.color;
     if (edge.key?.startsWith('line_') && edge.source !== edge.target && Array.isArray(color) && color.length === 4)
-        return color;
+        return normalizeTheme(color);
 };
 
 const themeKey = (edge: Edge) => JSON.stringify(getLineTheme(edge));
@@ -103,6 +116,13 @@ export interface LineTopology {
     type: 'LINE' | 'BRANCH' | 'LOOP';
 }
 
+/**
+ * Fallback for lines whose edges expose no single-theme colour (multi-colour styles,
+ * virtual-transfer dashes, or legacy saves). Keeps topology consumers safe instead of
+ * crashing on `theme[0]`/`theme[2]` access.
+ */
+const FALLBACK_LINE_THEME: Theme = [CityCode.Other, 'other', '#999999', MonoColour.white];
+
 export const getLineTopology = (graph: Graph, line: LineDefinition): LineTopology => {
     const resolvedGraph = resolveVirtualNodeReferences(graph);
     // 同一解析图上同一线路只计算一次（图变化时 resolvedGraph 对象随之改变，缓存自动失效）
@@ -151,7 +171,7 @@ export const getLineTopology = (graph: Graph, line: LineDefinition): LineTopolog
     }
     const terminalIds = [...terminals].sort(compare);
     const topology: LineTopology = {
-        theme: getLineTheme(edges[0])!,
+        theme: getLineTheme(edges[0]) ?? FALLBACK_LINE_THEME,
         stationIds,
         terminalIds,
         startCandidates: cycle || terminalIds.length === 0 ? stationIds : terminalIds,
@@ -200,6 +220,7 @@ export const reconcileLineDefinitions = (graph: Graph): Graph => {
         if (touching.length === 1) touching[0].edgeIds = [...touching[0].edgeIds, ...ids].sort();
         else definitions.push(emptyLineDefinition(ids));
     }
+
     for (const line of definitions) {
         const candidates = getLineTopology(graph, line).startCandidates;
         if (!candidates.includes(line.exportStartStationId)) line.exportStartStationId = candidates[0] ?? '';
@@ -231,7 +252,7 @@ export const reconcileLineDefinitions = (graph: Graph): Graph => {
             (attrs?.num !== undefined && attrs.num !== null ? String(attrs.num) : '').trim() ||
             (attrs?.content ?? attrs?.lineCode ?? attrs?.name ?? '').trim();
         if (!text) continue;
-        const key = JSON.stringify(color);
+        const key = JSON.stringify(normalizeTheme(color as Theme));
         const list = badgeTexts.get(key) ?? [];
         list.push({ text, names: text === names[0] ? names : ['', ''] });
         badgeTexts.set(key, list);

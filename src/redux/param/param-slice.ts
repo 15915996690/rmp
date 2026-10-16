@@ -34,9 +34,6 @@ export interface ProjectSnapshot {
     svgViewBoxMin: { x: number; y: number };
 }
 
-/** A whole-project replacement restores the complete RMP snapshot. */
-export type ProjectReplacement = ProjectSnapshot;
-
 /**
  * Controls how a history snapshot is restored. Every entry stores a complete
  * project snapshot, but graph entries restore only the graph while project
@@ -47,7 +44,7 @@ export type HistoryScope = 'graph' | 'project';
 /** A project snapshot together with the policy used to restore it. */
 export interface HistoryEntry extends ProjectSnapshot {
     scope: HistoryScope;
-    order: number;
+    order?: number;
 }
 
 /**
@@ -88,10 +85,8 @@ const initialState: ParamState = {
 // The scope is read from the stack head by the history thunk. Keeping it on the
 // action lets other slices follow the same restore policy, while this reducer
 // verifies that it still matches the stack head before changing either stack.
-const prepareHistoryAction = (scope: HistoryScope) => ({ payload: scope });
-
-export const applyUndoAction = createAction('undo', prepareHistoryAction);
-export const applyRedoAction = createAction('redo', prepareHistoryAction);
+export const applyUndoAction = createAction<HistoryScope>('undo');
+export const applyRedoAction = createAction<HistoryScope>('redo');
 
 const pushPast = (state: Draft<ParamState>, entry: Draft<HistoryEntry>) => {
     state.past.push(entry);
@@ -104,8 +99,8 @@ const pushPast = (state: Draft<ParamState>, entry: Draft<HistoryEntry>) => {
  * settings and viewport; project history replaces the entire snapshot.
  */
 const restoreHistoryEntry = (state: Draft<ParamState>, entry: Draft<HistoryEntry>): Draft<HistoryEntry> => {
-    const current: HistoryEntry = { scope: entry.scope, ...state.present };
-    const { scope, ...snapshot } = entry;
+    const current = { scope: entry.scope, ...state.present };
+    const { scope, order: _order, ...snapshot } = entry;
     state.present =
         scope === 'project'
             ? snapshot
@@ -113,6 +108,7 @@ const restoreHistoryEntry = (state: Draft<ParamState>, entry: Draft<HistoryEntry
                   ...state.present,
                   graph: snapshot.graph,
               };
+    delete (state.present as Draft<ProjectSnapshot> & { order?: number }).order;
     return current;
 };
 
@@ -135,22 +131,17 @@ const paramSlice = createSlice({
          */
         saveGraph: (state, action: PayloadAction<ParamGraph>) => {
             state.future = [];
-            pushPast(state, { scope: 'graph', order: nextHistoryOrder(), ...state.present });
+            pushPast(state, { order: nextHistoryOrder(), scope: 'graph', ...state.present });
             state.present = {
                 ...state.present,
                 graph: structuredClone(action.payload),
             };
         },
         /** Records a whole-project replacement, including its persisted viewport. */
-        replaceProjectState: {
-            prepare: (project: ProjectReplacement) => ({ payload: project }),
-            reducer: (state, action: PayloadAction<ProjectReplacement>) => {
-                state.future = [];
-                const previous: HistoryEntry = { scope: 'project', ...state.present };
-                pushPast(state, previous);
-                const { mapEnabled, mapStyle, graph, svgViewBoxZoom, svgViewBoxMin } = action.payload;
-                state.present = structuredClone({ mapEnabled, mapStyle, graph, svgViewBoxZoom, svgViewBoxMin });
-            },
+        replaceProjectState: (state, action: PayloadAction<ProjectSnapshot>) => {
+            state.future = [];
+            pushPast(state, { order: nextHistoryOrder(), scope: 'project', ...state.present });
+            state.present = structuredClone(action.payload);
         },
         setSvgViewport: (state, action: PayloadAction<{ zoom: number; min: { x: number; y: number } }>) => {
             state.present.svgViewBoxZoom = action.payload.zoom;

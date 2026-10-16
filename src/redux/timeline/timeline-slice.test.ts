@@ -32,7 +32,12 @@ describe('timeline action row ids', () => {
                 dateRows: [],
                 groups: [],
                 lines: [
-                    { id: 'line_1', groupId: 'group_1', elements: [], remark: 'legacy remark' } as TimelineLine & {
+                    {
+                        id: 'line_1',
+                        groupId: 'group_1',
+                        elements: [],
+                        remark: 'legacy remark',
+                    } as unknown as TimelineLine & {
                         remark: string;
                     },
                 ],
@@ -55,7 +60,7 @@ describe('timeline action row ids', () => {
                 dateRows: [],
                 groups: [],
                 lines: [
-                    { id: 'line_1', groupId: 'group_1', elements: [] } as TimelineLine,
+                    { id: 'line_1', groupId: 'group_1', elements: [] } as unknown as TimelineLine,
                     { id: 'line_2', groupId: 'group_1', text: '一期工程', elements: [] } as TimelineLine,
                 ],
                 actionRows: [],

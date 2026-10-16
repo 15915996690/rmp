@@ -1,6 +1,5 @@
-import type { MultiDirectedGraph } from 'graphology';
 import { linePaths, lineStyles } from '../components/svgs/lines/lines';
-import type { EdgeAttributes, GraphAttributes, LineId, NodeAttributes } from '../constants/constants';
+import type { EdgeAttributes } from '../constants/constants';
 import { LinePathType, LineStyleType } from '../constants/lines';
 
 /**
@@ -82,14 +81,3 @@ export const isLinePolicyVisible = (
     const styleVisible = isSubscriber || !lineStyles[attr.style].isPro;
     return pathVisible && styleVisible;
 };
-
-export const getUnavailableLineIds = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    mapEnabled: boolean,
-    isSubscriber: boolean
-): Set<LineId> =>
-    new Set(
-        graph
-            .edges()
-            .filter(id => !isLinePolicyVisible(graph.getEdgeAttributes(id), mapEnabled, isSubscriber)) as LineId[]
-    );

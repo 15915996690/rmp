@@ -5,9 +5,9 @@ import { useTranslation } from 'react-i18next';
 import { MdAdd, MdImageNotSupported, MdRemove } from 'react-icons/md';
 import { AttrsProps, MiscNodeId } from '../../../constants/constants';
 import { Node, NodeComponentProps } from '../../../constants/nodes';
+import { useRootSelector } from '../../../redux';
 import { imageStoreIndexedDB } from '../../../util/image-store-indexed-db';
 import { ImagePanelModal } from '../../page-header/image-panel-modal';
-import { useSvgRenderContext } from '../../svg-render-context';
 
 const Image = (props: NodeComponentProps<ImageAttributes>) => {
     const { id, attrs, handlePointerDown, handlePointerMove, handlePointerUp } = props;
@@ -18,7 +18,9 @@ const Image = (props: NodeComponentProps<ImageAttributes>) => {
         rotate = defaultImageAttributes.rotate,
         opacity = defaultImageAttributes.opacity,
     } = attrs ?? defaultImageAttributes;
-    const { getImage, imageRefresh } = useSvgRenderContext();
+    const {
+        refresh: { images: refreshImages },
+    } = useRootSelector(state => state.runtime);
 
     const onPointerDown = React.useCallback(
         (e: React.PointerEvent<SVGElement>) => handlePointerDown(id, e),
@@ -37,7 +39,7 @@ const Image = (props: NodeComponentProps<ImageAttributes>) => {
     React.useEffect(() => {
         let ignore = false;
         if (href) {
-            getImage(href).then(src => {
+            imageStoreIndexedDB.get(href).then(src => {
                 if (!ignore) setImgHref(src);
             });
         } else {
@@ -46,7 +48,7 @@ const Image = (props: NodeComponentProps<ImageAttributes>) => {
         return () => {
             ignore = true;
         };
-    }, [id, href, imageRefresh, getImage]);
+    }, [id, href, refreshImages]);
 
     return (
         <g>

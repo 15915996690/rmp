@@ -2,15 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { MonoColour } from '@railmapgen/rmg-palette-resources';
 import { CityCode } from '../constants/constants';
 import { LineStyleType } from '../constants/lines';
-import { createTestLineGraph } from '../test-utils';
+import { MiscNodeType } from '../constants/nodes';
+import { createTestLineGraph, TEST_LINE_THEME } from '../test-utils';
 import {
     assignLineSection,
     getLineAssignmentTargets,
     getLineEndpointsLabel,
+    getLineMergeSuggestions,
     getLineRoutes,
     getLineTopology,
     getUnassignedLineSections,
     isOpeningDateValid,
+    mergeLineDefinitions,
+    normalizeTheme,
     reconcileLineDefinitions,
     splitLineDefinition,
     unassignLineDefinition,
@@ -43,6 +47,93 @@ describe('persistent line definitions', () => {
         expect(result.map(line => line.id)).toEqual(definitions.map(line => line.id));
         expect(result[0].name).toEqual(['一号线', 'Line One']);
         expect(result[0].exportStartStationId).toBe('stn_A');
+    });
+
+    it('auto-fills line names from line badge misc nodes only when one badge text uses the colour', () => {
+        const graph = straight();
+        graph.addNode('misc_badge1', {
+            x: 0,
+            y: 0,
+            zIndex: 0,
+            visible: true,
+            type: MiscNodeType.GzmtrLineBadge,
+            [MiscNodeType.GzmtrLineBadge]: {
+                names: ['1号线', 'Line 1'],
+                color: TEST_LINE_THEME,
+                tram: false,
+                span: false,
+            },
+        });
+        let result = reconcileLineDefinitions(graph.export());
+        expect(result.attributes.lineDefinitions![0].name).toEqual(['1号线', 'Line 1']);
+
+        // 同一颜色被多种标志文本使用时不自动命名
+        graph.addNode('misc_badge2', {
+            x: 10,
+            y: 0,
+            zIndex: 0,
+            visible: true,
+            type: MiscNodeType.ShmetroNumLineBadge,
+            [MiscNodeType.ShmetroNumLineBadge]: { num: 2, color: TEST_LINE_THEME },
+        });
+        result = reconcileLineDefinitions(graph.export());
+        expect(result.attributes.lineDefinitions![0].name).toEqual(['', '']);
+
+        // 不同颜色的标志不影响
+        graph.dropNode('misc_badge2');
+        graph.setNodeAttribute('misc_badge1', MiscNodeType.GzmtrLineBadge, {
+            names: ['1号线', 'Line 1'],
+            color: [CityCode.Other, 'other', '#123456', MonoColour.white],
+            tram: false,
+            span: false,
+        });
+        result = reconcileLineDefinitions(graph.export());
+        expect(result.attributes.lineDefinitions![0].name).toEqual(['', '']);
+    });
+
+    it('normalizes hex casing so #E3002B and #e3002b are the same colour', () => {
+        expect(normalizeTheme([CityCode.Shanghai, 'sh1', '#E4002B', MonoColour.white])).toEqual([
+            CityCode.Shanghai,
+            'sh1',
+            '#e4002b',
+            '#fff',
+        ]);
+    });
+
+    it('auto-fills line names from badge nodes when the badge hex casing differs from the edge colour', () => {
+        const graph = straight();
+        // 线路边使用默认的大写 #E4002B，标志节点使用小写 #e4002b
+        graph.addNode('misc_badge_lowercase', {
+            x: 0,
+            y: 0,
+            zIndex: 0,
+            visible: true,
+            type: MiscNodeType.GzmtrLineBadge,
+            [MiscNodeType.GzmtrLineBadge]: {
+                names: ['1号线', 'Line 1'],
+                color: [CityCode.Shanghai, 'sh1', '#e4002b', MonoColour.white],
+                tram: false,
+                span: false,
+            },
+        });
+        const result = reconcileLineDefinitions(graph.export());
+        expect(result.attributes.lineDefinitions![0].name).toEqual(['1号线', 'Line 1']);
+    });
+
+    it('suggests merging head-to-tail sections when colours differ only by hex casing', () => {
+        const graph = createTestLineGraph([
+            ['A', 'B', [CityCode.Shanghai, 'sh1', '#E4002B', MonoColour.white]],
+            ['B', 'C', [CityCode.Shanghai, 'sh1', '#e4002b', MonoColour.white]],
+        ]).export();
+        // 连通边默认属于同一条线路，手工拆成两条首尾相连的定义
+        const base = graph.attributes.lineDefinitions![0];
+        graph.attributes.lineDefinitions = [
+            { ...base, id: 'line_upper', edgeIds: ['line_0'] },
+            { ...base, id: 'line_lower', edgeIds: ['line_1'] },
+        ];
+        const suggestions = getLineMergeSuggestions(graph);
+        expect(suggestions).toHaveLength(1);
+        expect(suggestions[0].flatMap(line => line.edgeIds).sort()).toEqual(['line_0', 'line_1']);
     });
 
     it('upgrades v79 and preserves metadata on subsequent load and JSON round trips', async () => {
@@ -123,7 +214,7 @@ describe('persistent line definitions', () => {
             ['C', 'E'],
         ]).export();
         const line = graph.attributes.lineDefinitions![0];
-        expect(getLineEndpointsLabel(graph, line)).toBe('A — D / E');
+        expect(getLineEndpointsLabel(graph, line)).toBe('A—D/E');
         const route = getLineRoutes(graph, line, 'stn_A', 'stn_D')[0];
         const result = splitLineDefinition(graph, line.id, route, 1, 3);
         expect(result.attributes.lineDefinitions!.map(item => item.edgeIds)).toEqual([
@@ -209,7 +300,7 @@ describe('whole-line removal and assignment', () => {
         const removed = unassignLineDefinition(graph, line.id);
         expect(removed.attributes.unassignedLineEdgeIds).toEqual(line.edgeIds);
         expect(removed.attributes.lineDefinitions).toEqual([]);
-        expect(getUnassignedLineSections(removed).map(item => getLineEndpointsLabel(removed, item))).toEqual(['A — E']);
+        expect(getUnassignedLineSections(removed).map(item => getLineEndpointsLabel(removed, item))).toEqual(['A—E']);
         expect(reconcileLineDefinitions(removed)).toEqual(removed);
         const reloaded = JSON.parse(await upgrade(JSON.stringify({ version: CURRENT_VERSION, graph: removed })));
         expect(reconcileLineDefinitions(reloaded.graph)).toEqual(removed);
@@ -364,6 +455,48 @@ describe('whole-line removal and assignment', () => {
             expect(getLineTopology(assigned, assigned.attributes.lineDefinitions![0]).type).toBe('LOOP');
             expect(getLineExports(assigned)[0].param!.loop).toBe(true);
         }
+    });
+
+    it('suggests same-colour head-to-tail lines and merges them in one action', () => {
+        const graph = straight().export();
+        const original = graph.attributes.lineDefinitions![0];
+        const separated = splitLineDefinition(
+            graph,
+            original.id,
+            getLineRoutes(graph, original, 'stn_A', 'stn_E')[0],
+            1,
+            3
+        );
+        const suggestions = getLineMergeSuggestions(separated);
+        expect(suggestions).toHaveLength(1);
+        expect(suggestions[0]).toHaveLength(3);
+        expect(suggestions[0].flatMap(line => line.edgeIds).sort()).toEqual(original.edgeIds);
+
+        // Merge keeps the metadata of the first definition in the group.
+        suggestions[0][0].name = ['保留', 'Keep'];
+        const merged = mergeLineDefinitions(
+            separated,
+            suggestions[0].map(line => line.id)
+        );
+        expect(merged.attributes.lineDefinitions).toHaveLength(1);
+        expect(merged.attributes.lineDefinitions![0]).toMatchObject({
+            id: suggestions[0][0].id,
+            name: ['保留', 'Keep'],
+            edgeIds: original.edgeIds,
+        });
+        expect(merged.nodes).toEqual(graph.nodes);
+        expect(merged.edges).toEqual(graph.edges);
+    });
+
+    it('does not suggest differently coloured or disconnected lines', () => {
+        const graph = createTestLineGraph([
+            ['A', 'B'],
+            ['B', 'C'],
+            ['C', 'D', [CityCode.Other, 'other', '#123456', MonoColour.white]],
+            ['X', 'Y'],
+        ]).export();
+        expect(getLineMergeSuggestions(graph)).toEqual([]);
+        expect(() => mergeLineDefinitions(graph, ['missing-a', 'missing-b'])).toThrow();
     });
 });
 

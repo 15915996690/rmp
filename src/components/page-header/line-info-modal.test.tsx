@@ -31,6 +31,31 @@ const setup = (
 };
 
 describe('line information and export panels', () => {
+    it('opens and applies restore default in the embedded panel', () => {
+        const store = setup();
+        const definitions = window.graph.getAttribute('lineDefinitions')!;
+        window.graph.setAttribute('lineDefinitions', [
+            { ...definitions[0], edgeIds: ['line_0', 'line_1'] },
+            { ...definitions[0], id: 'split', edgeIds: ['line_2', 'line_3'] },
+        ]);
+        store.dispatch(saveGraph(window.graph.export()));
+        render(
+            <RmgThemeProvider>
+                <LineInfoModal embedded />
+            </RmgThemeProvider>,
+            { store }
+        );
+        fireEvent.click(screen.getByRole('button', { name: '恢复默认' }));
+        fireEvent.click(screen.getByRole('button', { name: /^(确定|Confirm)$/ }));
+        expect(store.getState().param.present.graph.attributes.lineDefinitions).toHaveLength(1);
+        expect(store.getState().param.present.graph.attributes.lineDefinitions![0].edgeIds).toEqual([
+            'line_0',
+            'line_1',
+            'line_2',
+            'line_3',
+        ]);
+    });
+
     beforeEach(() => {
         HTMLElement.prototype.scrollTo = vi.fn();
         vi.mocked(exportToRmg).mockClear();

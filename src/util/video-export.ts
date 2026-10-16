@@ -26,6 +26,7 @@ import { makeRenderReadySVGElement } from './download';
 import { TextLanguage } from './fonts';
 import { calculateCanvasSize } from './helpers';
 import { getActionDuration, isQuickCompleteAction, scheduleActionRows } from './action-schedule';
+import { resolveVirtualNodeToStation } from './virtual-node-station';
 
 export interface VideoExportOptions {
     fps?: number;
@@ -903,6 +904,23 @@ const getCameraTargetPointForFrame = (
     if (focus.kind === 'node') return getNodeFocusPoint(graph, focus.id);
     if (focus.kind === 'edge') return getEdgeFocusPoint(graph, elem, focus.id, focus.progress, focus.reverse);
     return undefined;
+};
+
+/** 判断播放顺序中节点前面的线段是否连接到该节点（虚拟端点按其覆盖车站解析）。 */
+export const isNodeConnectedToPreviousEdge = (
+    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
+    elements: AnimationStep[],
+    index: number
+): boolean => {
+    const node = elements[index];
+    const previous = elements[index - 1];
+    if (!node || node.kind !== 'node' || !previous || previous.kind !== 'edge') return false;
+    if (!graph.hasNode(node.id as NodeId) || !graph.hasEdge(previous.id as LineId)) return false;
+
+    const nodeId = resolveVirtualNodeToStation(graph, node.id as NodeId);
+    return graph
+        .extremities(previous.id as LineId)
+        .some(endpoint => resolveVirtualNodeToStation(graph, endpoint as NodeId) === nodeId);
 };
 
 /**
@@ -2327,9 +2345,10 @@ function processFrame(
                 scheduleElementFrames(ctx, phase, phaseFrameRanges[currentPhaseIndex], currentPhaseIndex);
             // Process animations and set focus
             let latestFocusElement: AnimationStep | undefined;
-            for (const step of phase.elements) {
+            for (const [elementIndex, step] of phase.elements.entries()) {
                 // 批次内共享元素只由后一个动作（赢家）绘制与决定镜头，当前动作跳过
                 if (!isBatchElementWinner(phase, currentPhaseIndex, step.id)) continue;
+                const nodeFollowsConnectedEdge = isNodeConnectedToPreviousEdge(ctx.graph, phase.elements, elementIndex);
                 const startFrame = phase.quickComplete
                     ? phaseFrameRanges[currentPhaseIndex].start
                     : (ctx.elementStartFrame.get(getKey(step.id)) ?? frameIndex);
@@ -2361,7 +2380,7 @@ function processFrame(
                         quickComplete: phase.quickComplete,
                         versionTransition,
                     });
-                    if (frameSinceStart >= 0) latestFocusElement = step;
+                    if (frameSinceStart >= 0 && !nodeFollowsConnectedEdge) latestFocusElement = step;
                 } else {
                     const edgeDuration =
                         ctx.elementDurationFrame.get(getKey(step.id)) ?? Math.max(1, Math.round(ctx.fps * 0.5));
@@ -2472,6 +2491,11 @@ function processFrame(
             for (const step of closeElements) {
                 // 批次内共享元素只由后一个动作（赢家）更新，当前动作跳过
                 if (!isBatchElementWinner(phase, currentPhaseIndex, step.id)) continue;
+                const nodeFollowsConnectedEdge = isNodeConnectedToPreviousEdge(
+                    ctx.graph,
+                    phase.elements,
+                    phase.elements.indexOf(step)
+                );
                 const startFrame = ctx.elementStartFrame.get(getKey(step.id)) ?? frameIndex;
                 const duration = phase.quickComplete
                     ? Math.max(1, Math.round(ctx.fps))
@@ -2517,7 +2541,11 @@ function processFrame(
                         closing: true,
                     });
                 }
-                if (frameIndex >= startFrame && startFrame >= latestFocusStartFrame) {
+                if (
+                    frameIndex >= startFrame &&
+                    startFrame >= latestFocusStartFrame &&
+                    !(step.kind === 'node' && nodeFollowsConnectedEdge)
+                ) {
                     latestFocusElement = step;
                     latestFocusStartFrame = startFrame;
                 }

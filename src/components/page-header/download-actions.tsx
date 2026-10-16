@@ -31,6 +31,7 @@ import React from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { MdDownload, MdImage, MdOpenInNew, MdSave, MdSaveAs, MdVideoLibrary } from 'react-icons/md';
 import { Events } from '../../constants/constants';
+import { GlobalAlertId } from '../../constants/global-alerts';
 import { isTauri } from '../../constants/server';
 import { useRootDispatch, useRootSelector } from '../../redux';
 import { setGlobalAlert } from '../../redux/runtime/runtime-slice';
@@ -81,6 +82,10 @@ export default function DownloadActions() {
     const [svgVersion, setSvgVersion] = React.useState(2 as 1.1 | 2);
     const [maxArea, setMaxArea] = React.useState({ width: 1, height: 1, benchmark: 0.001 });
     const [scale, setScale] = React.useState(200);
+    // PNG 默认缩放：开启地图时 400%，否则 200%。
+    React.useEffect(() => {
+        setScale(param.present.mapEnabled ? 400 : 200);
+    }, [param.present.mapEnabled]);
     const scales = [25, 50, 100, 150, 200, 250, 300, 400, 500, 750, 1000, 1500, 2000];
     const scaleOptions: { [k: number]: string } = Object.fromEntries(scales.map(v => [v, `${v}%`]));
     const [resvgScaleOptions, setResvgScaleOptions] = React.useState<number[]>([]);
@@ -112,10 +117,7 @@ export default function DownloadActions() {
             label: t('header.download.scale'),
             value: scale,
             options: scaleOptions,
-            onChange: value => {
-                setScale(Number(value));
-                setIsCanvasSizeSupported(undefined);
-            },
+            onChange: value => setScale(value as number),
         },
         {
             type: 'switch',
@@ -179,7 +181,9 @@ export default function DownloadActions() {
                 images.push({ id: attr.href, base64: (await imageStoreIndexedDB.get(attr.href))! });
             }
         }
-        downloadAs(`RMP_${new Date().valueOf()}.json`, 'application/json', stringifyParam(param, images));
+        const data = { ...param, images };
+        const { undoStack, redoStack, unsavedDate, validationUndoPending, ...timelineForSave } = timeline;
+        downloadAs(`RMP_${new Date().valueOf()}.json`, 'application/json', stringifyParam(data, timelineForSave));
     };
     // thanks to this article that includes all steps to convert a svg to a png
     // https://levelup.gitconnected.com/draw-an-svg-to-canvas-and-download-it-as-image-in-javascript-f7f7713cf81f
@@ -252,7 +256,13 @@ export default function DownloadActions() {
                         setIsDownloadRunning(false);
                         if (!blob) {
                             // The canvas size is bigger than the current browser can support.
-                            dispatch(setGlobalAlert({ status: 'error', message: t('header.download.imageTooBig') }));
+                            dispatch(
+                                setGlobalAlert({
+                                    id: GlobalAlertId.DownloadImageTooBig,
+                                    status: 'error',
+                                    message: t('header.download.imageTooBig'),
+                                })
+                            );
                             return;
                         }
                         downloadBlobAs(`RMP_${new Date().valueOf()}.png`, blob!);

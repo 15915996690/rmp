@@ -65,6 +65,16 @@ export default function TimelinePlayer({ isOpen, onClose }: TimelinePlayerProps)
     );
 
     const bgColor = useColorModeValue('rgba(255,255,255,0.95)', 'rgba(26,32,44,0.95)');
+    const formatPlayerTime = (milliseconds: number) => {
+        const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        const seconds = totalSeconds % 60;
+        return totalMinutes >= 60
+            ? `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+            : `${totalMinutes}:${seconds.toString().padStart(2, '0')}`;
+    };
 
     // 初始化播放器
     React.useEffect(() => {
@@ -560,14 +570,20 @@ export default function TimelinePlayer({ isOpen, onClose }: TimelinePlayerProps)
 
                 {/* 进度条 */}
                 {hudState && (
-                    <Box width="100%" height="3px" bg="gray.200" borderRadius="full" mt={1}>
-                        <Box
-                            height="100%"
-                            bg="primary.500"
-                            borderRadius="full"
-                            style={{ width: `${(hudState.currentMs / Math.max(playerTotalMs, 1)) * 100}%` }}
-                        />
-                    </Box>
+                    <>
+                        <HStack justify="space-between" mt={1} fontSize="xs" color="gray.600">
+                            <Text>{formatPlayerTime(hudState.currentMs)}</Text>
+                            <Text>{formatPlayerTime(playerTotalMs)}</Text>
+                        </HStack>
+                        <Box width="100%" height="3px" bg="gray.200" borderRadius="full" mt={1}>
+                            <Box
+                                height="100%"
+                                bg="primary.500"
+                                borderRadius="full"
+                                style={{ width: `${(hudState.currentMs / Math.max(playerTotalMs, 1)) * 100}%` }}
+                            />
+                        </Box>
+                    </>
                 )}
             </Box>
         </Box>

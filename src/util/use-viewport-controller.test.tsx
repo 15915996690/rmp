@@ -14,7 +14,10 @@ interface HookHarnessProps {
 }
 
 const HookHarness = React.forwardRef<ViewportControllerApi, HookHarnessProps>((props, ref) => {
-    const controller = useViewportController({ viewport: props.viewport, onViewportChange: props.onViewportChange });
+    const controller = useViewportController({
+        viewport: props.viewport,
+        onViewportChange: props.onViewportChange,
+    });
 
     React.useImperativeHandle(ref, () => controller, [controller]);
 
@@ -82,26 +85,21 @@ describe('useViewportController', () => {
         expect(store.getState().viewport.liveViewport).toEqual({ x: 30, y: 40, zoom: 50 });
     });
 
-    it('notifies viewport consumers after applying the latest RAF frame', () => {
+    it('notifies the imperative observer only when a viewport transform is applied', () => {
         const store = createStore();
         const ref = React.createRef<ViewportControllerApi>();
-        const onViewportChange = vi.fn();
+        const observer = vi.fn();
 
-        render(<HookHarness ref={ref} viewport={{ x: 0, y: 0, zoom: 100 }} onViewportChange={onViewportChange} />, {
-            store,
-        });
-        onViewportChange.mockClear();
+        render(<HookHarness ref={ref} viewport={{ x: 0, y: 0, zoom: 100 }} onViewportChange={observer} />, { store });
+        expect(observer).toHaveBeenLastCalledWith({ x: 0, y: 0, zoom: 100 });
 
         act(() => {
-            ref.current?.viewportPreview({ x: 10, y: 20, zoom: 80 });
-            ref.current?.viewportPreview({ x: 30, y: 40, zoom: 50 });
+            ref.current?.viewportPreview({ x: 20, y: 30, zoom: 50 });
         });
+        expect(observer).toHaveBeenCalledTimes(1);
 
-        expect(onViewportChange).not.toHaveBeenCalled();
         flushRaf();
-
-        expect(onViewportChange).toHaveBeenCalledTimes(1);
-        expect(onViewportChange).toHaveBeenLastCalledWith({ x: 30, y: 40, zoom: 50 });
+        expect(observer).toHaveBeenLastCalledWith({ x: 20, y: 30, zoom: 50 });
     });
 
     it('returns the latest queued viewport before the RAF flushes', () => {

@@ -19,11 +19,13 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { EdgeAttributes, GraphAttributes, NodeAttributes, StnId } from '../../constants/constants';
 import { StationType } from '../../constants/stations';
-import { useRootDispatch } from '../../redux';
-import { saveGraph, setSvgViewBoxMin, setSvgViewBoxZoom } from '../../redux/param/param-slice';
+import { useRootDispatch, useRootSelector } from '../../redux';
+import { saveGraph, setMapEnabled, setSvgViewBoxMin, setSvgViewBoxZoom } from '../../redux/param/param-slice';
 import { clearSelected, refreshEdgesThunk, refreshNodesThunk } from '../../redux/runtime/runtime-slice';
+import { clearTimelineData, loadTimeline } from '../../redux/timeline/timeline-slice';
 import { autoPopulateTransfer, changeStationsTypeInBatch } from '../../util/change-types';
 import { convertAARCToRmp, StationTypeOption, stationTypeOptions } from '../../util/import-from-aarc';
+import { convertBsbldToRmp, isBsbldSave } from '../../util/import-from-bsbld';
 
 interface ImportFromAarcProps {
     isOpen: boolean;
@@ -32,6 +34,9 @@ interface ImportFromAarcProps {
 
 export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps) {
     const dispatch = useRootDispatch();
+    const timelineEnabled = useRootSelector(
+        state => state.app.preference.timelineFeatureEnabled || state.timeline.enabled
+    );
     const { t } = useTranslation();
     const [text, setText] = React.useState('');
     const [step, setStep] = React.useState<1 | 2>(1);
@@ -47,18 +52,51 @@ export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps)
 
     const [nodeCount, setNodeCount] = React.useState(0);
     const [edgeCount, setEdgeCount] = React.useState(0);
+    const [format, setFormat] = React.useState<'aarc' | 'bsbld' | undefined>();
+    const [bsbldFictionalMode, setBsbldFictionalMode] = React.useState(true);
+    const [bsbldTimeline, setBsbldTimeline] = React.useState<ReturnType<typeof convertBsbldToRmp>['timeline']>();
+    const [isAarcConfig, setIsAarcConfig] = React.useState(false);
 
     const handleImport = () => {
         if (!text.trim()) return;
         dispatch(clearSelected());
+        let parsed: unknown;
 
         try {
             graphNew.current.clear();
-            convertAARCToRmp(text, graphNew.current);
+            parsed = JSON.parse(text) as unknown;
+            if (isBsbldSave(parsed)) {
+                const result = convertBsbldToRmp(text, graphNew.current, stationTypeOptions[mode].basic);
+                setFormat('bsbld');
+                setBsbldFictionalMode(result.fictionalMode);
+                setBsbldTimeline(result.timeline);
+                setIsAarcConfig(false);
+            } else {
+                convertAARCToRmp(text, graphNew.current);
+                setFormat('aarc');
+                setBsbldTimeline(undefined);
+                setIsAarcConfig(false);
+            }
             setNodeCount(graphNew.current.nodes().length);
             setEdgeCount(graphNew.current.edges().length);
         } catch (error) {
             logger.error('ImportFromAarc.handleImport():: Error occurred while importing data from other tools', error);
+            setFormat(undefined);
+            setBsbldTimeline(undefined);
+            setIsAarcConfig(
+                !!parsed &&
+                    typeof parsed === 'object' &&
+                    !(
+                        'idIncre' in parsed &&
+                        'points' in parsed &&
+                        'lines' in parsed &&
+                        'textTags' in parsed &&
+                        'cvsSize' in parsed
+                    ) &&
+                    ['configVersion', 'bgRefImage', 'lineWidthMapped', 'snapRayAngles'].some(
+                        key => key in (parsed as Record<string, unknown>)
+                    )
+            );
             setNodeCount(0);
             setEdgeCount(0);
         }
@@ -67,26 +105,40 @@ export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps)
     };
 
     const confirmImport = () => {
-        changeStationsTypeInBatch(
-            graphNew.current,
-            StationType.SuzhouRTBasic,
-            stationTypeOptions[mode].basic,
-            graphNew.current.nodes().filter(id => id.startsWith('stn_')) as StnId[]
-        );
-        changeStationsTypeInBatch(
-            graphNew.current,
-            StationType.SuzhouRTInt,
-            stationTypeOptions[mode].int,
-            graphNew.current.nodes().filter(id => id.startsWith('stn_')) as StnId[]
-        );
-        graphNew.current
-            .nodes()
-            .filter(id => id.startsWith('stn_'))
-            .forEach(id => {
-                autoPopulateTransfer(graphNew.current, id as StnId);
-            });
+        let timelineToLoad = bsbldTimeline;
+        if (format === 'bsbld') {
+            graphNew.current.clear();
+            const result = convertBsbldToRmp(text, graphNew.current, stationTypeOptions[mode].basic);
+            timelineToLoad = result.timeline;
+        }
+        if (format === 'aarc') {
+            changeStationsTypeInBatch(
+                graphNew.current,
+                StationType.SuzhouRTBasic,
+                stationTypeOptions[mode].basic,
+                graphNew.current.nodes().filter(id => id.startsWith('stn_')) as StnId[]
+            );
+            changeStationsTypeInBatch(
+                graphNew.current,
+                StationType.SuzhouRTInt,
+                stationTypeOptions[mode].int,
+                graphNew.current.nodes().filter(id => id.startsWith('stn_')) as StnId[]
+            );
+            graphNew.current
+                .nodes()
+                .filter(id => id.startsWith('stn_'))
+                .forEach(id => {
+                    autoPopulateTransfer(graphNew.current, id as StnId);
+                });
+        }
         graph.current.clear();
         graph.current.import(graphNew.current.export());
+        if (format === 'bsbld') dispatch(setMapEnabled(!bsbldFictionalMode));
+        if (format === 'bsbld' && timelineEnabled && timelineToLoad) {
+            dispatch(loadTimeline({ ...timelineToLoad, enabled: true, baseGraph: graph.current.export() }));
+        } else {
+            dispatch(clearTimelineData());
+        }
         dispatch(setSvgViewBoxZoom(100));
         dispatch(setSvgViewBoxMin({ x: 0, y: 0 }));
         refreshAndSave();
@@ -97,11 +149,19 @@ export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps)
 
     const handlePrevious = () => {
         setText('');
+        setFormat(undefined);
+        setBsbldFictionalMode(true);
+        setBsbldTimeline(undefined);
+        setIsAarcConfig(false);
         setStep(1);
     };
 
     const handleClose = () => {
         setText('');
+        setFormat(undefined);
+        setBsbldFictionalMode(true);
+        setBsbldTimeline(undefined);
+        setIsAarcConfig(false);
         setStep(1);
         onClose();
     };
@@ -193,7 +253,11 @@ export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps)
                             <ModalBody pt={2}>
                                 <VStack align="stretch" spacing={4}>
                                     <Text fontSize="md">
-                                        {t('header.open.otherPlatform.detected', { x: nodeCount, y: edgeCount })}
+                                        {t('header.open.otherPlatform.detected', {
+                                            tool: format === 'bsbld' ? 'bsbld' : 'AARC',
+                                            x: nodeCount,
+                                            y: edgeCount,
+                                        })}
                                     </Text>
                                     <RmgFields fields={modeFields} />
                                 </VStack>
@@ -211,7 +275,13 @@ export default function ImportFromAarc({ isOpen, onClose }: ImportFromAarcProps)
                         <>
                             <ModalBody pt={2}>
                                 <VStack align="stretch" spacing={4}>
-                                    <Text fontSize="md">{t('header.open.otherPlatform.error')}</Text>
+                                    <Text fontSize="md">
+                                        {t(
+                                            isAarcConfig
+                                                ? 'header.open.otherPlatform.configOnlyError'
+                                                : 'header.open.otherPlatform.error'
+                                        )}
+                                    </Text>
                                 </VStack>
                             </ModalBody>
                             <ModalFooter>

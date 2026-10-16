@@ -14,6 +14,7 @@ import { useRootDispatch } from '../../../redux';
 import { saveGraph } from '../../../redux/param/param-slice';
 import { refreshEdgesThunk } from '../../../redux/runtime/runtime-slice';
 import { usePaletteTheme } from '../../../util/hooks';
+import { normalizeTheme } from '../../../util/line-definitions';
 import { AttributesWithColor, dynamicColorInjection } from '../../panels/details/color-field';
 import ThemeButton from '../../panels/theme-button';
 
@@ -26,11 +27,12 @@ export const RemoveLinesWithSingleColorModal = (props: { isOpen: boolean; onClos
     const { theme, requestThemeChange } = usePaletteTheme();
 
     const handleChange = () => {
+        const targetThemeKey = JSON.stringify(normalizeTheme(theme));
         graph.current
             .filterEdges(
                 (edge, attr, source, target, sourceAttr, targetAttr, undirected) =>
                     dynamicColorInjection.has(attr.style) &&
-                    JSON.stringify((attr[attr.style] as AttributesWithColor).color) === JSON.stringify(theme)
+                    JSON.stringify(normalizeTheme((attr[attr.style] as AttributesWithColor).color)) === targetThemeKey
             )
             .forEach(edge => graph.current.dropEdge(edge));
         dispatch(saveGraph(graph.current.export()));

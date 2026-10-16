@@ -2,9 +2,11 @@ import rmgRuntime, { logger } from '@railmapgen/rmg-runtime';
 import { MultiDirectedGraph } from 'graphology';
 import { DEFAULT_MAP_STYLE } from '../map/map-style';
 import { EdgeAttributes, GraphAttributes, LocalStorageKey, NodeAttributes } from '../constants/constants';
+import { GlobalAlertId } from '../constants/global-alerts';
 import i18n from '../i18n/config';
 import { onLocalStorageChangeRMT, onRMPSaveUpdate } from '../util/rmt-save';
 import { normalizeTimelineStationFlags, RMPSave, stringifyParam, upgrade } from '../util/save';
+import { downloadAs } from '../util/download';
 import { RootStore, startRootListening } from '.';
 import { setActiveSubscriptions, setState } from './account/account-slice';
 import {
@@ -31,6 +33,36 @@ import { initializeProject, ProjectSnapshot } from './param/param-slice';
 import { refreshEdgesThunk, refreshNodesThunk, setGlobalAlert } from './runtime/runtime-slice';
 import { normalizeRandomStationsNames, normalizeStationNameTranslationMode } from './state-migration';
 import { loadTimeline } from './timeline/timeline-slice';
+
+let quotaRecoveryTriggered = false;
+
+const recoverFromStorageQuota = (store: RootStore) => {
+    if (quotaRecoveryTriggered) return;
+    quotaRecoveryTriggered = true;
+    const state = store.getState();
+    const { undoStack, redoStack, unsavedDate, validationUndoPending, ...timelineForSave } = state.timeline;
+    const save = stringifyParam(state.param, timelineForSave);
+
+    try {
+        downloadAs(`RMP_quota-recovery_${Date.now()}.json`, 'application/json', save);
+    } finally {
+        localStorage.removeItem(LocalStorageKey.PARAM);
+        localStorage.removeItem(LocalStorageKey.PARAM_BACKUP);
+        localStorage.removeItem(LocalStorageKey.APP);
+    }
+};
+
+const handleStorageQuotaExceeded = (store: RootStore, dispatch: RootStore['dispatch']) => {
+    logger.error('Local storage quota exceeded, unable to save state.');
+    recoverFromStorageQuota(store);
+    dispatch(
+        setGlobalAlert({
+            id: GlobalAlertId.LocalStorageQuotaExceeded,
+            status: 'error',
+            message: `${i18n.t('localStorageQuotaExceeded')} 已自动下载存档，并清理本地项目缓存。`,
+        })
+    );
+};
 
 export const initStore = async (store: RootStore) => {
     // Load localstorage first or they will be overwritten after first store.dispatch.
@@ -111,8 +143,21 @@ export const initStore = async (store: RootStore) => {
     // Upgrade param and inject to ParamState.
     const param = await upgrade(paramState);
 
-    const { version, images: _images, ...project } = JSON.parse(param) as RMPSave;
-    window.graph = MultiDirectedGraph.from(project.graph);
+    const { version, graph, timeline: timelineSave, ...save } = JSON.parse(param) as RMPSave;
+    // graphology 的 import 按【引用】存储属性对象。下方同一份 graph 会进入 Redux，
+    // 被 Immer 的 autoFreeze 深度冻结，从而连带冻结 window.graph 的属性，导致
+    // setEdgeAttribute/removeNodeAttribute 等变更抛出 "object is not extensible"。
+    // 因此这里先深拷贝一份给 window.graph，切断与 Redux 状态的引用共享。
+    window.graph = MultiDirectedGraph.from(structuredClone(graph));
+    if (store.getState().app.preference.timelineFeatureEnabled) {
+        normalizeTimelineStationFlags(window.graph);
+    }
+    const project: ProjectSnapshot = {
+        ...save,
+        mapEnabled: save.mapEnabled ?? false,
+        mapStyle: save.mapStyle ?? structuredClone(DEFAULT_MAP_STYLE),
+        graph,
+    };
     store.dispatch(initializeProject(project));
     await Promise.all([store.dispatch(refreshNodesThunk()), store.dispatch(refreshEdgesThunk())]);
 
@@ -156,14 +201,13 @@ export const initStore = async (store: RootStore) => {
         },
         effect: (_action, listenerApi) => {
             try {
-                const state = listenerApi.getState();
-                localStorage.setItem(LocalStorageKey.PARAM, stringifyParam(state.param));
+                const state = store.getState();
+                const { undoStack, redoStack, unsavedDate, validationUndoPending, ...timelineForSave } = state.timeline;
+                localStorage.setItem(LocalStorageKey.PARAM, stringifyParam(state.param, timelineForSave));
                 onRMPSaveUpdate(); // notify rmt to update the save
             } catch (error) {
                 if (error instanceof Error && error.name == 'QuotaExceededError') {
-                    logger.error('Local storage quota exceeded, unable to save state.');
-                    const message = i18n.t('localStorageQuotaExceeded');
-                    listenerApi.dispatch(setGlobalAlert({ status: 'error', message }));
+                    handleStorageQuotaExceeded(store, listenerApi.dispatch);
                 }
             }
         },
@@ -178,9 +222,7 @@ export const initStore = async (store: RootStore) => {
                 rmgRuntime.storage.set(LocalStorageKey.APP, JSON.stringify(listenerApi.getState().app));
             } catch (error) {
                 if (error instanceof Error && error.name == 'QuotaExceededError') {
-                    logger.error('Local storage quota exceeded, unable to save state.');
-                    const message = i18n.t('localStorageQuotaExceeded');
-                    listenerApi.dispatch(setGlobalAlert({ status: 'error', message }));
+                    handleStorageQuotaExceeded(store, listenerApi.dispatch);
                 }
             }
         },
@@ -195,9 +237,7 @@ export const initStore = async (store: RootStore) => {
                 rmgRuntime.storage.set(LocalStorageKey.LOGIN_STATE, JSON.stringify(listenerApi.getState().account));
             } catch (error) {
                 if (error instanceof Error && error.name == 'QuotaExceededError') {
-                    logger.error('Local storage quota exceeded, unable to save state.');
-                    const message = i18n.t('localStorageQuotaExceeded');
-                    listenerApi.dispatch(setGlobalAlert({ status: 'error', message }));
+                    handleStorageQuotaExceeded(store, listenerApi.dispatch);
                 }
             }
         },
@@ -229,7 +269,9 @@ export const initStore = async (store: RootStore) => {
                 if (error instanceof Error && error.name == 'QuotaExceededError') {
                     logger.error('Local storage quota exceeded, unable to save state.');
                     const message = i18n.t('localStorageQuotaExceeded');
-                    listenerApi.dispatch(setGlobalAlert({ status: 'error', message }));
+                    listenerApi.dispatch(
+                        setGlobalAlert({ id: GlobalAlertId.ImportRmgProjectFailed, status: 'error', message })
+                    );
                 }
             }
         },

@@ -470,6 +470,12 @@ function TimelineItem({
     const bg = isSelected ? 'blue.50' : isDragging ? 'teal.50' : undefined;
     const boxShadow = isDragging ? 'sm' : undefined;
 
+    const getVersionName = (version: number): string => {
+        if (version === 1) return 'basic';
+        const stored = graph.getNodeAttribute(entry.id as NodeId, 'versions')?.find(v => v.version === version);
+        return stored?.name || `v${version}`;
+    };
+
     if (isNode) {
         const name = getNodeDisplayName(graph, entry.id as NodeId);
         const showVersionSelector = versionOptions.length > 1;
@@ -509,7 +515,7 @@ function TimelineItem({
                     >
                         {versionOptions.map(v => (
                             <option key={v} value={v}>
-                                {getNodeVersionName(entry.id as NodeId, v)}
+                                {getVersionName(v)}
                             </option>
                         ))}
                     </Select>

@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { current, isDraft } from 'immer';
 import { SerializedGraph } from 'graphology-types';
 import { nanoid } from 'nanoid';
 import { NodeAttributes, EdgeAttributes, GraphAttributes } from '../../constants/constants';
@@ -14,6 +15,11 @@ import {
 import { applyUndoAction, applyRedoAction } from '../param/param-slice';
 import { nextHistoryOrder } from '../history-order';
 import { normalizeInheritedActionFields } from '../../util/action-schedule';
+
+const cloneBaseGraph = (
+    graph: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>
+): SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes> =>
+    structuredClone(isDraft(graph) ? current(graph) : graph);
 
 const initialState: TimelineState = {
     ...TIMELINE_DEFAULTS,
@@ -324,10 +330,25 @@ const timelineSlice = createSlice({
         ) => {
             // 深拷贝后再存入 Redux（与 param-slice 口径一致），避免 Immer autoFreeze
             // 连带冻结调用方（如 window.graph）仍在引用的属性对象。
-            state.baseGraph = structuredClone(action.payload);
+            state.baseGraph = cloneBaseGraph(action.payload);
         },
         clearTimelineData: state => {
+            state.undoStack.push({
+                order: nextHistoryOrder(),
+                dateRows: [...state.dateRows],
+                groups: [...state.groups],
+                lines: [...state.lines],
+                actionRows: [...state.actionRows],
+                unsavedDate: state.unsavedDate,
+                diffs: [...state.diffs],
+                enabled: state.enabled,
+                totalDuration: state.totalDuration,
+                currentTime: state.currentTime,
+                baseGraph: cloneBaseGraph(state.baseGraph),
+            });
+            state.redoStack = [];
             state.enabled = false;
+            state.validationUndoPending = false;
             state.dateRows = [];
             state.groups = [];
             state.lines = [];
@@ -336,8 +357,6 @@ const timelineSlice = createSlice({
             state.currentTime = 0;
             state.totalDuration = TIMELINE_DEFAULTS.totalDuration;
             state.baseGraph = {} as SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
-            state.undoStack = [];
-            state.redoStack = [];
             state.unsavedDate = '';
             state.validationUndoPending = false;
         },
@@ -355,6 +374,20 @@ const timelineSlice = createSlice({
                 baseGraph: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
             }>
         ) => {
+            state.undoStack.push({
+                order: nextHistoryOrder(),
+                dateRows: [...state.dateRows],
+                groups: [...state.groups],
+                lines: [...state.lines],
+                actionRows: [...state.actionRows],
+                unsavedDate: state.unsavedDate,
+                diffs: [...state.diffs],
+                enabled: state.enabled,
+                totalDuration: state.totalDuration,
+                currentTime: state.currentTime,
+                baseGraph: cloneBaseGraph(state.baseGraph),
+            });
+            state.redoStack = [];
             state.enabled = action.payload.enabled;
             state.totalDuration = action.payload.totalDuration;
             state.currentTime = action.payload.currentTime;
@@ -362,16 +395,14 @@ const timelineSlice = createSlice({
             state.groups = (action.payload.groups ?? []).map(({ remark: _, ...group }) => group);
             // 旧存档的线路段没有名称，按全局序号补默认名（与历史 UI 显示一致）
             state.lines = (action.payload.lines ?? []).map(({ remark: _, ...line }, index) => ({
-                text: `#${index + 1}`,
                 ...line,
+                text: line.text || `#${index + 1}`,
             }));
             state.actionRows = normalizeInheritedActionFields(normalizeActionRowIds(action.payload.actionRows ?? []));
             state.diffs = action.payload.diffs ?? [];
             // 深拷贝后再存入 Redux：baseGraph 往往与刚导入 window.graph 的对象同源，
             // 直接赋值会让 Immer 冻结外部 graph 的属性。
-            state.baseGraph = structuredClone(action.payload.baseGraph);
-            state.undoStack = [];
-            state.redoStack = [];
+            state.baseGraph = cloneBaseGraph(action.payload.baseGraph);
         },
         undoTimeline: state => {
             const prev = state.undoStack.pop();
@@ -384,6 +415,10 @@ const timelineSlice = createSlice({
                     actionRows: [...state.actionRows],
                     unsavedDate: state.unsavedDate,
                     diffs: [...state.diffs],
+                    enabled: state.enabled,
+                    totalDuration: state.totalDuration,
+                    currentTime: state.currentTime,
+                    baseGraph: cloneBaseGraph(state.baseGraph),
                 });
                 state.dateRows = prev.dateRows;
                 state.groups = prev.groups;
@@ -391,6 +426,10 @@ const timelineSlice = createSlice({
                 state.actionRows = prev.actionRows;
                 state.unsavedDate = prev.unsavedDate;
                 state.diffs = prev.diffs;
+                if (prev.enabled !== undefined) state.enabled = prev.enabled;
+                if (prev.totalDuration !== undefined) state.totalDuration = prev.totalDuration;
+                if (prev.currentTime !== undefined) state.currentTime = prev.currentTime;
+                if (prev.baseGraph) state.baseGraph = cloneBaseGraph(prev.baseGraph);
             }
         },
         redoTimeline: state => {
@@ -404,6 +443,10 @@ const timelineSlice = createSlice({
                     actionRows: [...state.actionRows],
                     unsavedDate: state.unsavedDate,
                     diffs: [...state.diffs],
+                    enabled: state.enabled,
+                    totalDuration: state.totalDuration,
+                    currentTime: state.currentTime,
+                    baseGraph: cloneBaseGraph(state.baseGraph),
                 });
                 state.dateRows = next.dateRows;
                 state.groups = next.groups;
@@ -411,6 +454,10 @@ const timelineSlice = createSlice({
                 state.actionRows = next.actionRows;
                 state.unsavedDate = next.unsavedDate;
                 state.diffs = next.diffs;
+                if (next.enabled !== undefined) state.enabled = next.enabled;
+                if (next.totalDuration !== undefined) state.totalDuration = next.totalDuration;
+                if (next.currentTime !== undefined) state.currentTime = next.currentTime;
+                if (next.baseGraph) state.baseGraph = cloneBaseGraph(next.baseGraph);
             }
         },
         clearValidationUndoPending: state => {
@@ -446,6 +493,10 @@ const timelineSlice = createSlice({
                         actionRows: [...state.actionRows],
                         unsavedDate: state.unsavedDate,
                         diffs: [...state.diffs],
+                        enabled: state.enabled,
+                        totalDuration: state.totalDuration,
+                        currentTime: state.currentTime,
+                        baseGraph: cloneBaseGraph(state.baseGraph),
                     });
                     state.dateRows = prev.dateRows;
                     state.groups = prev.groups;
@@ -453,6 +504,10 @@ const timelineSlice = createSlice({
                     state.actionRows = prev.actionRows;
                     state.unsavedDate = prev.unsavedDate;
                     state.diffs = prev.diffs;
+                    if (prev.enabled !== undefined) state.enabled = prev.enabled;
+                    if (prev.totalDuration !== undefined) state.totalDuration = prev.totalDuration;
+                    if (prev.currentTime !== undefined) state.currentTime = prev.currentTime;
+                    if (prev.baseGraph) state.baseGraph = cloneBaseGraph(prev.baseGraph);
                     state.validationUndoPending = true;
                 }
             })
@@ -467,6 +522,10 @@ const timelineSlice = createSlice({
                         actionRows: [...state.actionRows],
                         unsavedDate: state.unsavedDate,
                         diffs: [...state.diffs],
+                        enabled: state.enabled,
+                        totalDuration: state.totalDuration,
+                        currentTime: state.currentTime,
+                        baseGraph: cloneBaseGraph(state.baseGraph),
                     });
                     state.dateRows = next.dateRows;
                     state.groups = next.groups;
@@ -474,6 +533,10 @@ const timelineSlice = createSlice({
                     state.actionRows = next.actionRows;
                     state.unsavedDate = next.unsavedDate;
                     state.diffs = next.diffs;
+                    if (next.enabled !== undefined) state.enabled = next.enabled;
+                    if (next.totalDuration !== undefined) state.totalDuration = next.totalDuration;
+                    if (next.currentTime !== undefined) state.currentTime = next.currentTime;
+                    if (next.baseGraph) state.baseGraph = cloneBaseGraph(next.baseGraph);
                     state.validationUndoPending = true;
                 }
             });

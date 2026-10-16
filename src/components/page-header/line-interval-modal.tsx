@@ -18,6 +18,7 @@ import {
 import type { SerializedGraph } from 'graphology-types';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { MdChevronRight } from 'react-icons/md';
 import type { EdgeAttributes, GraphAttributes, NodeAttributes } from '../../constants/constants';
 import type { LineDefinition } from '../../constants/line-definitions';
 import {
@@ -54,6 +55,7 @@ export const LineIntervalModal = ({
     const [from, setFrom] = React.useState(line.exportStartStationId || topology.startCandidates[0] || '');
     const [to, setTo] = React.useState(topology.startCandidates.find(id => id !== from) || from);
     const [routeIndex, setRouteIndex] = React.useState(0);
+    const [isPathPickerOpen, setIsPathPickerOpen] = React.useState(false);
     const [selection, setSelection] = React.useState<Selection>();
     const routes = React.useMemo(
         () => getLineRoutes(graph, line, from, isLoop ? from : to),
@@ -162,200 +164,243 @@ export const LineIntervalModal = ({
         </g>
     );
 
-    return (
-        <Modal isOpen onClose={onClose} size="4xl" scrollBehavior="inside">
+    const pathPicker = (
+        <Modal isOpen={isPathPickerOpen} onClose={() => setIsPathPickerOpen(false)} size="xl" scrollBehavior="inside">
             <ModalOverlay />
             <ModalContent>
-                <ModalHeader>{t('header.lineInfo.editInterval')}</ModalHeader>
+                <ModalHeader>{t('header.lineInfo.pickPath')}</ModalHeader>
                 <ModalCloseButton />
                 <ModalBody>
-                    <Stack spacing="4">
-                        <Text fontSize="sm">{t('header.lineInfo.intervalHelp')}</Text>
-                        <HStack align="start" flexWrap="wrap">
-                            <FormControl flex="1" minW="160px">
-                                <FormLabel>
-                                    {t(`header.lineInfo.${isLoop ? 'referenceStation' : 'pathStart'}`)}
-                                </FormLabel>
-                                <Select
-                                    value={from}
-                                    onChange={event => {
-                                        setFrom(event.target.value);
-                                        if (event.target.value === to)
-                                            setTo(topology.startCandidates.find(id => id !== event.target.value) || '');
-                                        setRouteIndex(0);
-                                        setSelection(undefined);
-                                    }}
-                                >
-                                    {topology.startCandidates.map(id => (
-                                        <option key={id} value={id}>
-                                            {getStationLabel(graph, id)}
-                                        </option>
-                                    ))}
-                                </Select>
-                            </FormControl>
-                            {!isLoop && (
+                    <Stack spacing="2">
+                        {routes.map((option, index) => (
+                            <Button
+                                key={option.key}
+                                size="md"
+                                h="auto"
+                                py="2"
+                                whiteSpace="normal"
+                                variant={index === routeIndex ? 'solid' : 'outline'}
+                                colorScheme="blue"
+                                fontWeight="normal"
+                                onClick={() => {
+                                    setRouteIndex(index);
+                                    setSelection(undefined);
+                                    setIsPathPickerOpen(false);
+                                }}
+                            >
+                                {option.stationIds.map(id => getStationLabel(graph, id)).join('—')}
+                            </Button>
+                        ))}
+                    </Stack>
+                </ModalBody>
+            </ModalContent>
+        </Modal>
+    );
+
+    return (
+        <>
+            <Modal isOpen onClose={onClose} size="4xl" scrollBehavior="inside">
+                <ModalOverlay />
+                <ModalContent>
+                    <ModalHeader>{t('header.lineInfo.editInterval')}</ModalHeader>
+                    <ModalCloseButton />
+                    <ModalBody>
+                        <Stack spacing="4">
+                            <Text fontSize="sm">{t('header.lineInfo.intervalHelp')}</Text>
+                            <HStack align="start" flexWrap="wrap">
                                 <FormControl flex="1" minW="160px">
-                                    <FormLabel>{t('header.lineInfo.pathEnd')}</FormLabel>
+                                    <FormLabel>
+                                        {t(`header.lineInfo.${isLoop ? 'referenceStation' : 'pathStart'}`)}
+                                    </FormLabel>
                                     <Select
-                                        value={to}
+                                        value={from}
                                         onChange={event => {
-                                            setTo(event.target.value);
+                                            setFrom(event.target.value);
+                                            if (event.target.value === to)
+                                                setTo(
+                                                    topology.startCandidates.find(id => id !== event.target.value) || ''
+                                                );
                                             setRouteIndex(0);
                                             setSelection(undefined);
                                         }}
                                     >
-                                        {topology.startCandidates
-                                            .filter(id => id !== from)
-                                            .map(id => (
-                                                <option key={id} value={id}>
-                                                    {getStationLabel(graph, id)}
-                                                </option>
-                                            ))}
-                                    </Select>
-                                </FormControl>
-                            )}
-                            {routes.length > 1 && (
-                                <FormControl flex="1" minW="160px">
-                                    <FormLabel>{t('header.lineInfo.path')}</FormLabel>
-                                    <Select
-                                        value={routeIndex}
-                                        onChange={event => {
-                                            setRouteIndex(Number(event.target.value));
-                                            setSelection(undefined);
-                                        }}
-                                    >
-                                        {routes.map((option, index) => (
-                                            <option key={option.key} value={index}>
-                                                {option.stationIds.map(id => getStationLabel(graph, id)).join(' — ')}
+                                        {topology.startCandidates.map(id => (
+                                            <option key={id} value={id}>
+                                                {getStationLabel(graph, id)}
                                             </option>
                                         ))}
                                     </Select>
                                 </FormControl>
-                            )}
-                        </HStack>
-                        {topology.type === 'BRANCH' && <Text fontSize="sm">{t('header.lineInfo.branchHelp')}</Text>}
-                        {route && diagram ? (
-                            <Box overflowX="auto" borderWidth="1px" borderRadius="md">
-                                <svg
-                                    ref={svgRef}
-                                    width={width}
-                                    height={diagram.height}
-                                    viewBox={`0 0 ${width} ${diagram.height}`}
-                                    aria-label={t('header.lineInfo.intervalDiagram')}
-                                    style={{ display: 'block' }}
-                                >
-                                    {diagram.branches.map(branch => (
-                                        <path
-                                            key={branch.key}
-                                            data-branch-edges={branch.edgeIds.join(' ')}
-                                            d={branch.path}
-                                            fill="none"
-                                            stroke={topology.theme[2]}
-                                            strokeWidth="4"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            opacity="0.5"
-                                        />
-                                    ))}
-                                    <line
-                                        x1={PADDING}
-                                        x2={PADDING + last * GAP}
-                                        y1={INTERVAL_ROUTE_Y}
-                                        y2={INTERVAL_ROUTE_Y}
-                                        stroke={topology.theme[2]}
-                                        strokeWidth="5"
-                                        opacity="0.3"
-                                    />
-                                    <line
-                                        x1={PADDING + start * GAP}
-                                        x2={PADDING + end * GAP}
-                                        y1={INTERVAL_ROUTE_Y}
-                                        y2={INTERVAL_ROUTE_Y}
-                                        stroke={topology.theme[2]}
-                                        strokeWidth="6"
-                                    />
-                                    {diagram.junctions.map(point => (
-                                        <g key={point.id} transform={`translate(${point.x},${point.y})`}>
-                                            {!point.id.startsWith('stn_') && <circle r="4" fill={topology.theme[2]} />}
-                                            <text x="20" y="-18" fontSize="11" fill="currentColor">
-                                                {t('header.lineInfo.junction')}
-                                            </text>
-                                        </g>
-                                    ))}
-                                    {diagram.stations.map(point => (
-                                        <g
-                                            key={point.key}
-                                            data-station-id={point.stationId}
-                                            data-on-route={point.onRoute}
-                                            transform={`translate(${point.x},${point.y})`}
+                                {!isLoop && (
+                                    <FormControl flex="1" minW="160px">
+                                        <FormLabel>{t('header.lineInfo.pathEnd')}</FormLabel>
+                                        <Select
+                                            value={to}
+                                            onChange={event => {
+                                                setTo(event.target.value);
+                                                setRouteIndex(0);
+                                                setSelection(undefined);
+                                            }}
                                         >
-                                            <circle r="8" fill="white" stroke={topology.theme[2]} strokeWidth="3" />
-                                            <text
-                                                transform="translate(12,38) rotate(25)"
-                                                fontSize="12"
-                                                fill="currentColor"
+                                            {topology.startCandidates
+                                                .filter(id => id !== from)
+                                                .map(id => (
+                                                    <option key={id} value={id}>
+                                                        {getStationLabel(graph, id)}
+                                                    </option>
+                                                ))}
+                                        </Select>
+                                    </FormControl>
+                                )}
+                                {routes.length > 1 && (
+                                    <FormControl flex="1" minW="160px">
+                                        <FormLabel>{t('header.lineInfo.path')}</FormLabel>
+                                        <Button
+                                            size="md"
+                                            w="full"
+                                            h="32px"
+                                            fontWeight="normal"
+                                            px="3"
+                                            textAlign="left"
+                                            justifyContent="space-between"
+                                            aria-label={t('header.lineInfo.pickPath')}
+                                            onClick={() => setIsPathPickerOpen(true)}
+                                        >
+                                            <Text isTruncated>
+                                                {route.stationIds.map(id => getStationLabel(graph, id)).join('—')}
+                                            </Text>
+                                            <MdChevronRight />
+                                        </Button>
+                                    </FormControl>
+                                )}
+                            </HStack>
+                            {topology.type === 'BRANCH' && <Text fontSize="sm">{t('header.lineInfo.branchHelp')}</Text>}
+                            {route && diagram ? (
+                                <Box overflowX="auto" borderWidth="1px" borderRadius="md">
+                                    <svg
+                                        ref={svgRef}
+                                        width={width}
+                                        height={diagram.height}
+                                        viewBox={`0 0 ${width} ${diagram.height}`}
+                                        aria-label={t('header.lineInfo.intervalDiagram')}
+                                        style={{ display: 'block' }}
+                                    >
+                                        {diagram.branches.map(branch => (
+                                            <path
+                                                key={branch.key}
+                                                data-branch-edges={branch.edgeIds.join(' ')}
+                                                d={branch.path}
+                                                fill="none"
+                                                stroke={topology.theme[2]}
+                                                strokeWidth="4"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                opacity="0.5"
+                                            />
+                                        ))}
+                                        <line
+                                            x1={PADDING}
+                                            x2={PADDING + last * GAP}
+                                            y1={INTERVAL_ROUTE_Y}
+                                            y2={INTERVAL_ROUTE_Y}
+                                            stroke={topology.theme[2]}
+                                            strokeWidth="5"
+                                            opacity="0.3"
+                                        />
+                                        <line
+                                            x1={PADDING + start * GAP}
+                                            x2={PADDING + end * GAP}
+                                            y1={INTERVAL_ROUTE_Y}
+                                            y2={INTERVAL_ROUTE_Y}
+                                            stroke={topology.theme[2]}
+                                            strokeWidth="6"
+                                        />
+                                        {diagram.junctions.map(point => (
+                                            <g key={point.id} transform={`translate(${point.x},${point.y})`}>
+                                                {!point.id.startsWith('stn_') && (
+                                                    <circle r="4" fill={topology.theme[2]} />
+                                                )}
+                                                <text x="20" y="-18" fontSize="11" fill="currentColor">
+                                                    {t('header.lineInfo.junction')}
+                                                </text>
+                                            </g>
+                                        ))}
+                                        {diagram.stations.map(point => (
+                                            <g
+                                                key={point.key}
+                                                data-station-id={point.stationId}
+                                                data-on-route={point.onRoute}
+                                                transform={`translate(${point.x},${point.y})`}
                                             >
-                                                <title>{getStationLabel(graph, point.stationId)}</title>
-                                                {getStationLabel(graph, point.stationId)}
-                                            </text>
-                                        </g>
-                                    ))}
-                                    {handleRing('start', start, '#3182ce')}
-                                    {handleRing('end', end, '#dd6b20')}
-                                </svg>
-                            </Box>
-                        ) : (
-                            <Text>{t('header.lineInfo.noPath')}</Text>
-                        )}
-                        {isLoop && (
-                            <Button
-                                alignSelf="start"
-                                size="sm"
-                                onClick={swapArc}
-                                isDisabled={!route || route.stationIds[start] === route.stationIds[end]}
-                            >
-                                {t('header.lineInfo.otherArc')}
-                            </Button>
-                        )}
-                        {route && (
-                            <Text>
-                                {t('header.lineInfo.selection')}: {getStationLabel(graph, route.stationIds[start])} —{' '}
-                                {getStationLabel(graph, route.stationIds[end])}
-                            </Text>
-                        )}
-                        {preview ? (
-                            <Box>
-                                <Text fontWeight="bold">{t('header.lineInfo.splitPreview')}</Text>
-                                {preview.attributes?.lineDefinitions
-                                    ?.filter(
-                                        item =>
-                                            item.id === line.id ||
-                                            !graph.attributes?.lineDefinitions?.some(old => old.id === item.id)
-                                    )
-                                    .map(item => (
-                                        <Text key={item.id}>{getLineEndpointsLabel(preview, item)}</Text>
-                                    ))}
-                            </Box>
-                        ) : (
-                            <Text fontSize="sm">{t('header.lineInfo.properInterval')}</Text>
-                        )}
-                    </Stack>
-                </ModalBody>
-                <ModalFooter gap="2">
-                    <Button variant="outline" onClick={onClose}>
-                        {t('cancel')}
-                    </Button>
-                    <Button
-                        colorScheme="blue"
-                        isDisabled={!preview}
-                        onClick={() => {
-                            if (preview) onApply(preview);
-                        }}
-                    >
-                        {t('header.lineInfo.split')}
-                    </Button>
-                </ModalFooter>
-            </ModalContent>
-        </Modal>
+                                                <circle r="8" fill="white" stroke={topology.theme[2]} strokeWidth="3" />
+                                                <text
+                                                    transform="translate(12,38) rotate(25)"
+                                                    fontSize="12"
+                                                    fill="currentColor"
+                                                >
+                                                    <title>{getStationLabel(graph, point.stationId)}</title>
+                                                    {getStationLabel(graph, point.stationId)}
+                                                </text>
+                                            </g>
+                                        ))}
+                                        {handleRing('start', start, '#3182ce')}
+                                        {handleRing('end', end, '#dd6b20')}
+                                    </svg>
+                                </Box>
+                            ) : (
+                                <Text>{t('header.lineInfo.noPath')}</Text>
+                            )}
+                            {isLoop && (
+                                <Button
+                                    alignSelf="start"
+                                    size="sm"
+                                    onClick={swapArc}
+                                    isDisabled={!route || route.stationIds[start] === route.stationIds[end]}
+                                >
+                                    {t('header.lineInfo.otherArc')}
+                                </Button>
+                            )}
+                            {route && (
+                                <Text>
+                                    {t('header.lineInfo.selection')}: {getStationLabel(graph, route.stationIds[start])}{' '}
+                                    — {getStationLabel(graph, route.stationIds[end])}
+                                </Text>
+                            )}
+                            {preview ? (
+                                <Box>
+                                    <Text fontWeight="bold">{t('header.lineInfo.splitPreview')}</Text>
+                                    {preview.attributes?.lineDefinitions
+                                        ?.filter(
+                                            item =>
+                                                item.id === line.id ||
+                                                !graph.attributes?.lineDefinitions?.some(old => old.id === item.id)
+                                        )
+                                        .map(item => (
+                                            <Text key={item.id}>{getLineEndpointsLabel(preview, item)}</Text>
+                                        ))}
+                                </Box>
+                            ) : (
+                                <Text fontSize="sm">{t('header.lineInfo.properInterval')}</Text>
+                            )}
+                        </Stack>
+                    </ModalBody>
+                    <ModalFooter gap="2">
+                        <Button variant="outline" onClick={onClose}>
+                            {t('cancel')}
+                        </Button>
+                        <Button
+                            colorScheme="blue"
+                            isDisabled={!preview}
+                            onClick={() => {
+                                if (preview) onApply(preview);
+                            }}
+                        >
+                            {t('header.lineInfo.split')}
+                        </Button>
+                    </ModalFooter>
+                </ModalContent>
+            </Modal>
+            {pathPicker}
+        </>
     );
 };

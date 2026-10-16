@@ -3,10 +3,12 @@ import { EdgeEntry } from 'graphology-types';
 import { linePaths } from '../components/svgs/lines/lines';
 import { EdgeAttributes, GraphAttributes, Id, LineId, MiscNodeId, NodeAttributes, StnId } from '../constants/constants';
 import { ExternalLinePathAttributes, LinePathType, LineStyleType } from '../constants/lines';
-import { OpenPath, makeLinearPath, makePoint } from '../constants/path';
+import { Path, makeLinearPath, makePoint } from '../constants/path';
 import { checkSimplePathAvailability, reconcileSimplePathWithParallel } from './auto-simple';
 import { classifyParallelLines, getBaseParallelLineID, makeParallelPaths, supportsParallelLinePath } from './parallel';
+import { isOpenPath } from './path';
 import { makeReconciledPath, reconcileLines } from './reconcile';
+import { canReconcileLine } from './reconcile-ui';
 
 /**
  * This file contains helper methods to extract stations/miscNodes/lines
@@ -31,45 +33,67 @@ export const getNodes = (graph: MultiDirectedGraph<NodeAttributes, EdgeAttribute
 
 export interface LineRenderElement {
     attr: EdgeAttributes;
-    path: OpenPath;
+    path: Path;
 }
 
 type NonNullableExternalLinePathAttribute = NonNullable<ExternalLinePathAttributes[keyof ExternalLinePathAttributes]>;
 
-export const getLines = (
-    graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>,
-    { showReconcileWarnings = true }: { showReconcileWarnings?: boolean } = {}
-): Element[] => {
+export const getLines = (graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>): Element[] => {
     const resolvedLines: Element[] = [];
     const reconciledLines: Element[] = [];
     const danglingLines: Element[] = [];
 
     const cachedSimplePathAvailability: { [k in LineId]: ReturnType<typeof checkSimplePathAvailability> } = {};
+    const cachedGeneratedPaths: Partial<Record<LineId, Path>> = {};
     const parallelLines: EdgeEntry<NodeAttributes, EdgeAttributes>[] = [];
     const lineGroupsToReconcile: { [reconcileId: string]: EdgeEntry<NodeAttributes, EdgeAttributes>[] } = {};
     const normalLines: EdgeEntry<NodeAttributes, EdgeAttributes>[] = [];
 
-    // Check and cache all the lines if they can be a simple path.
+    // Precompute the values used to classify lines without regenerating their authored geometry.
     for (const lineEntry of graph.edgeEntries()) {
+        const lineID = lineEntry.edge as LineId;
+        const type = lineEntry.attributes.type;
+        if (!Object.hasOwn(linePaths, type)) continue;
         const [x1, y1, x2, y2] = [
             lineEntry.sourceAttributes.x,
             lineEntry.sourceAttributes.y,
             lineEntry.targetAttributes.x,
             lineEntry.targetAttributes.y,
         ];
-        const attr = lineEntry.attributes[lineEntry.attributes.type] as NonNullableExternalLinePathAttribute;
-        const simplePathAvailability = checkSimplePathAvailability(lineEntry.attributes.type, x1, y1, x2, y2, attr);
-        cachedSimplePathAvailability[lineEntry.edge as LineId] = simplePathAvailability;
+        const attr = lineEntry.attributes[type] as NonNullableExternalLinePathAttribute;
+        cachedSimplePathAvailability[lineID] = checkSimplePathAvailability(type, x1, y1, x2, y2, attr);
+        cachedGeneratedPaths[lineID] = linePaths[type].generatePath(x1, x2, y1, y2, attr as any);
     }
 
     // Generalize all the lines into parallel, reconcile, simple, and normal lines.
     for (const lineEntry of graph.edgeEntries()) {
-        let simplePathAvailability = cachedSimplePathAvailability[lineEntry.edge as LineId];
+        const lineID = lineEntry.edge as LineId;
+        let simplePathAvailability = cachedSimplePathAvailability[lineID];
 
-        const { parallelIndex, type } = lineEntry.attributes;
+        const { parallelIndex, type, style } = lineEntry.attributes;
+        if (!Object.hasOwn(linePaths, type)) {
+            resolvedLines.push({
+                id: lineID,
+                type: 'line',
+                line: {
+                    attr: lineEntry.attributes,
+                    path: makeLinearPath(
+                        makePoint(lineEntry.sourceAttributes.x, lineEntry.sourceAttributes.y),
+                        makePoint(lineEntry.targetAttributes.x, lineEntry.targetAttributes.y)
+                    ),
+                },
+            });
+            continue;
+        }
+        const generatedPath = cachedGeneratedPaths[lineID];
+        if (generatedPath && !isOpenPath(generatedPath)) {
+            // parallel, reconcile, and auto-simple operations cannot handle area path geometry
+            normalLines.push(lineEntry);
+            continue;
+        }
         if (parallelIndex >= 0 && supportsParallelLinePath(type)) {
             // only find the base parallel line and see if it is a simple path
-            const baseLineId = getBaseParallelLineID(graph, type, lineEntry.edge as LineId);
+            const baseLineId = getBaseParallelLineID(graph, type, lineID);
             const baseSimplePathAvailability = cachedSimplePathAvailability[baseLineId];
             if (!baseSimplePathAvailability) {
                 parallelLines.push(lineEntry);
@@ -83,7 +107,7 @@ export const getLines = (
                 simplePathAvailability = reconcileSimplePathWithParallel(x1, y1, x2, y2, offset, parallelIndex);
             }
         }
-        if (lineEntry.attributes.reconcileId !== '') {
+        if (lineEntry.attributes.reconcileId !== '' && canReconcileLine(type, style)) {
             const reconcileId = lineEntry.attributes.reconcileId;
             if (reconcileId in lineGroupsToReconcile) lineGroupsToReconcile[reconcileId].push(lineEntry);
             else lineGroupsToReconcile[reconcileId] = [lineEntry];
@@ -91,7 +115,6 @@ export const getLines = (
         }
         if (simplePathAvailability) {
             // make simple path here so no more auto simple path needs to be checked later in normal lines
-            const lineID = lineEntry.edge as LineId;
             const attr = lineEntry.attributes;
             const { x1, y1, x2, y2, offset } = simplePathAvailability;
             resolvedLines.push({
@@ -120,6 +143,11 @@ export const getLines = (
         parallels.forEach(_ => resolvedParallelLinesID.add(_.edge as LineId));
 
         const parallelPaths = makeParallelPaths(parallels);
+        if (!parallelPaths) {
+            // some of the parallel lines contain non-open paths
+            normalLines.push(...parallels);
+            continue;
+        }
         for (const parallel of parallels) {
             const lineID = parallel.edge as LineId;
             resolvedLines.push({
@@ -157,26 +185,20 @@ export const getLines = (
             id: danglingLine,
             type: 'line',
             line: {
-                attr: showReconcileWarnings
-                    ? {
-                          ...attr,
-                          // Dangling reconciled lines will have a visual warning (unknown style).
-                          // Mark only this render-time copy as unknown so the graph data stays unchanged.
-                          style: LineStyleType.Unknown,
-                          [LineStyleType.Unknown]: {},
-                      }
-                    : attr,
-                // A timeline may show only one segment of a valid chain. Keep its authored geometry and style.
-                path:
-                    !showReconcileWarnings && cachedGeneratedPaths[danglingLine]
-                        ? cachedGeneratedPaths[danglingLine]!
-                        : linePaths[LinePathType.Simple].generatePath(
-                              sourceAttr.x,
-                              targetAttr.x,
-                              sourceAttr.y,
-                              targetAttr.y,
-                              linePaths[LinePathType.Simple].defaultAttrs
-                          ),
+                attr: {
+                    ...attr,
+                    // Dangling reconciled lines will have a visual warning (unknown style).
+                    // Mark only this render-time copy as unknown so the graph data stays unchanged.
+                    style: LineStyleType.Unknown,
+                    [LineStyleType.Unknown]: {},
+                },
+                path: linePaths[LinePathType.Simple].generatePath(
+                    sourceAttr.x,
+                    targetAttr.x,
+                    sourceAttr.y,
+                    targetAttr.y,
+                    linePaths[LinePathType.Simple].defaultAttrs
+                ),
             },
         });
     }
@@ -192,18 +214,6 @@ export const getLines = (
             lineEntry.targetAttributes.x,
             lineEntry.targetAttributes.y,
         ];
-        if (!(type in linePaths)) {
-            // unknown line path type
-            resolvedLines.push({
-                id: lineID,
-                type: 'line',
-                line: {
-                    attr,
-                    path: makeLinearPath(makePoint(x1, y1), makePoint(x2, y2)),
-                },
-            });
-            continue;
-        }
 
         // regular line path type, call the corresponding generatePath function
         resolvedLines.push({
@@ -211,7 +221,7 @@ export const getLines = (
             type: 'line',
             line: {
                 attr,
-                path: linePaths[type].generatePath(x1, x2, y1, y2, attr[type] as any),
+                path: cachedGeneratedPaths[lineID] ?? linePaths[type].generatePath(x1, x2, y1, y2, attr[type] as any),
             },
         });
     }

@@ -99,7 +99,7 @@ describe('normalizeInheritedActionFields', () => {
     it('元动作（全览/等待/聚焦）继承备注但日期始终为空', () => {
         const rows = [
             openAction('a', { date: '2024-01-01', remark: '首动作备注', actionLineId: 'line1' }),
-            { ...action('b', true), actionType: 'wait', date: '2024-01-01' },
+            { ...action('b', true), actionType: 'wait' as const, date: '2024-01-01' },
         ];
         const normalized = normalizeInheritedActionFields(rows);
         expect(normalized[1].date).toBe('');

@@ -32,9 +32,9 @@ export const Node2Font: {
     [StationType.JREastImportant]: [TextLanguage.jreast_ja, TextLanguage.jreast_en],
     [StationType.TokyoMetroBasic]: [TextLanguage.tokyo_ja, TextLanguage.tokyo_en],
     [StationType.TokyoMetroInt]: [TextLanguage.tokyo_ja, TextLanguage.tokyo_en],
+    [StationType.OsakaMetro]: [TextLanguage.tokyo_ja, TextLanguage.berlin],
     [StationType.LondonTubeBasic]: [TextLanguage.tube],
     [StationType.LondonTubeInt]: [TextLanguage.tube],
-    [StationType.LondonRiverServicesInt]: [TextLanguage.tube],
     [MiscNodeType.BerlinSBahnLineBadge]: [TextLanguage.berlin],
     [MiscNodeType.BerlinUBahnLineBadge]: [TextLanguage.berlin],
     [MiscNodeType.JREastLineBadge]: [TextLanguage.jreast_ja],
@@ -162,24 +162,16 @@ type FontFaceConfig = {
     descriptors?: FontFaceDescriptors;
 };
 
-const getBundledFontSource = (fileName: string) => `url("${import.meta.env.BASE_URL}fonts/${fileName}")`;
-
 const LTAIdentity: FontFaceConfig = {
-    source: getBundledFontSource('LTAIdentity-Medium.ttf'),
+    source: 'url("./fonts/LTAIdentity-Medium.ttf")',
     descriptors: { display: 'swap' },
 };
-const MPLUS2: FontFaceConfig = {
-    source: getBundledFontSource('Mplus2-Medium.otf'),
-    descriptors: { display: 'swap' },
-};
-const Roboto: FontFaceConfig = { source: getBundledFontSource('Roboto-Bold.ttf'), descriptors: { display: 'swap' } };
-const MontaguSlab: FontFaceConfig = {
-    source: getBundledFontSource('MontaguSlab.ttf'),
-    descriptors: { display: 'swap' },
-};
-const Railway: FontFaceConfig = { source: getBundledFontSource('Railway-PlyE.otf'), descriptors: { display: 'swap' } };
+const MPLUS2: FontFaceConfig = { source: 'url("./fonts/Mplus2-Medium.otf")', descriptors: { display: 'swap' } };
+const Roboto: FontFaceConfig = { source: 'url("./fonts/Roboto-Bold.ttf")', descriptors: { display: 'swap' } };
+const MontaguSlab: FontFaceConfig = { source: 'url("./fonts/MontaguSlab.ttf")', descriptors: { display: 'swap' } };
+const Railway: FontFaceConfig = { source: 'url("./fonts/Railway-PlyE.otf")', descriptors: { display: 'swap' } };
 const TaipeiSansTC: FontFaceConfig = {
-    source: getBundledFontSource('TaipeiSansTCBeta-Regular.ttf'),
+    source: 'url("./fonts/TaipeiSansTCBeta-Regular.ttf")',
     descriptors: { display: 'swap' },
 };
 
@@ -196,8 +188,6 @@ const FONTS: Partial<Record<TextLanguage, { config: FontFaceConfig | undefined; 
 };
 
 const loadedLangs: TextLanguage[] = [];
-const encodedFontsStyleCache = new Map<string, Promise<string>>();
-
 export const loadFont = async (lang: TextLanguage) => {
     const fontObj = FONTS[lang];
     if (!fontObj || loadedLangs.includes(lang)) return;
@@ -210,19 +200,14 @@ export const loadFont = async (lang: TextLanguage) => {
 
 export const makeBase64EncodedFontsStyle = async (languages: TextLanguage[]) => {
     const s = document.createElement('style');
-    const key = [...new Set(languages)].sort().join('|');
-    let cssPromise = encodedFontsStyleCache.get(key);
-    if (!cssPromise) {
-        cssPromise = Promise.allSettled(
-            languages.filter(lang => lang in FONTS).map(lang => rmgRuntime.getFontCSS(FONTS[lang]!.name))
-        ).then(cssPromises =>
-            cssPromises
-                .filter((promise): promise is PromiseFulfilledResult<string> => promise.status === 'fulfilled')
-                .map(promise => promise.value)
-                .join('\n')
-        );
-        encodedFontsStyleCache.set(key, cssPromise);
-    }
-    s.textContent = await cssPromise;
+
+    const cssPromises = await Promise.allSettled(
+        languages.filter(lang => lang in FONTS).map(lang => rmgRuntime.getFontCSS(FONTS[lang]!.name))
+    );
+    const cssTexts = cssPromises
+        .filter((promise): promise is PromiseFulfilledResult<string> => promise.status === 'fulfilled')
+        .map(promise => promise.value);
+    s.textContent += cssTexts.join('\n');
+
     return s;
 };

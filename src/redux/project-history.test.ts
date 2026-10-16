@@ -117,6 +117,7 @@ describe('project history', () => {
 
         expectCurrentProject(testStore, nextProject);
         expect(testStore.getState().param.past.at(-1)).toEqual({
+            order: expect.any(Number),
             scope: 'project',
             ...previousProject,
         });

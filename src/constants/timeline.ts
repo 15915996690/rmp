@@ -1,130 +1,185 @@
-import { Id, LineId, NodeId } from './constants';
-
-export const TIMELINE_DOCUMENT_VERSION = 1;
-
-export type TimelinePhase = 'enter' | 'exit';
-
-export interface TimelineElementEntryBase {
-    id: string;
-    phase: TimelinePhase;
-    showAnimation: boolean;
-}
-
-export type TimelineElementEntry =
-    | (TimelineElementEntryBase & { kind: 'node'; refId: NodeId })
-    | (TimelineElementEntryBase & { kind: 'edge'; refId: LineId });
-
-export interface TimelineKeyframeEntry {
-    id: string;
-    kind: 'keyframe';
-    refId: NodeId;
-    x: number;
-    y: number;
-}
-
-export type TimelinePausePosition = 'before' | 'after';
-
-export interface TimelinePauseEntry {
-    id: string;
-    kind: 'pause';
-    position: TimelinePausePosition;
-    duration: number;
-    refId?: never;
-    phase?: never;
-    showAnimation?: never;
-}
-
-export type TimelineEntry = TimelineElementEntry | TimelineKeyframeEntry | TimelinePauseEntry;
+import { SerializedGraph } from 'graphology-types';
+import { NodeAttributes, EdgeAttributes, GraphAttributes, Id, NodeId, LineId } from './constants';
 
 /**
- * Audio is deliberately kept out of the visual track so clips may overlap.
- * `startSlot`/`endSlot` are discrete cursor indices (0 = before the first entry,
- * track.length = after the last one), snapped to the centre of each insertion cursor.
- * `startTime`/`endTime`, when set, place clips at exact video times in seconds.
+ * 线路段元素 - 线路段中包含的单个图元素。
  */
-export interface TimelineTimedEntry {
+export interface LineElement {
+    /** 图元素ID (node 或 edge) */
+    id: Id;
+    /** 线段是否反转方向 */
+    reverse?: boolean;
+    /** 是否与上一个元素同时开始动画 */
+    simultaneous?: boolean;
+    /** 节点历史版本号 (仅节点有效) */
+    version?: number;
+}
+
+/**
+ * 日期行 - 时间轴上的日期阶段标记
+ */
+export interface DateRow {
     id: string;
-    kind: 'audio' | 'label';
-    startSlot: number;
-    endSlot: number;
-    startTime?: number;
-    endTime?: number;
-    /** Initial label span in seconds, until its end is placed explicitly. */
-    duration?: number;
+    /** 开始时间 (秒) */
+    startTime: number;
+    /** 结束时间 (秒) */
+    endTime: number;
+    /** 备注文本 */
+    remark: string;
+    /** 徽章背景颜色 */
+    badgeBgColor: string;
+    /** 徽章显示文本 */
+    badgeText: string;
+    /** 日期字符串 */
+    date: string;
 }
 
-export const TIMELINE_LABEL_DEFAULT_SECONDS = 15;
-
-export interface TimelineAudioEntry extends TimelineTimedEntry {
-    kind: 'audio';
-    blobId: string;
-    name: string;
-}
-
-/** Text overlays occupy their own lane and never change the map animation schedule. */
-export interface TimelineLabelEntry extends TimelineTimedEntry {
-    kind: 'label';
+/**
+ * 线路 - 第一级结构，包含颜色和名称，下可包含多个线路段。
+ */
+export interface LineGroup {
+    id: string;
+    /** 线路颜色 */
+    bgColor: string;
+    /** 线路名称 */
     text: string;
 }
 
-export const TIMELINE_CAMERA_ZOOM_LEVELS = [1, 2, 4, 8, 16] as const;
-export type TimelineCameraZoom = (typeof TIMELINE_CAMERA_ZOOM_LEVELS)[number];
-export const isTimelineCameraZoom = (value: unknown): value is TimelineCameraZoom =>
-    typeof value === 'number' && TIMELINE_CAMERA_ZOOM_LEVELS.includes(value as TimelineCameraZoom);
-
-export type TimelineLengthUnit = 'km' | 'mi';
-
-export interface TimelineSettings {
-    speedMultiplier: number;
-    cameraZoom: TimelineCameraZoom;
-    autoChangeStationType: boolean;
-    showYear: boolean;
-    showLineName: boolean;
-    showLineLength: boolean;
-    lineLengthUnit: TimelineLengthUnit;
+/**
+ * 线路段 - 第二级结构，属于某条线路，包含图元素列表。
+ */
+export interface TimelineLine {
+    id: string;
+    /** 所属线路ID */
+    groupId: string;
+    /** 线路段名称 */
+    text: string;
+    /** 关联的图元素列表 */
+    elements: LineElement[];
+    /** 线路段长度（公里） */
+    mileage?: number;
 }
 
-export const DEFAULT_TIMELINE_SETTINGS: TimelineSettings = {
-    speedMultiplier: 1,
-    cameraZoom: 2,
-    autoChangeStationType: true,
-    showYear: false,
-    showLineName: false,
-    showLineLength: false,
-    lineLengthUnit: 'km',
-};
-
-export interface TimelineDocument {
-    version: typeof TIMELINE_DOCUMENT_VERSION;
-    track: TimelineEntry[];
-    audioTrack?: TimelineAudioEntry[];
-    labelTrack?: TimelineLabelEntry[];
-    settings?: TimelineSettings;
+/**
+ * 动作列表行 - 时间线编辑器下半部分的动作配置
+ */
+export interface CloseNodeStyle {
+    /** 停运完成后是否保留该换乘站 */
+    visible: boolean;
+    /** 保留时使用的节点历史版本 */
+    version: number;
 }
 
-export const getTimelineSettings = (document: TimelineDocument): TimelineSettings => {
-    const settings = { ...DEFAULT_TIMELINE_SETTINGS, ...document.settings };
-    return {
-        ...settings,
-        cameraZoom: isTimelineCameraZoom(settings.cameraZoom)
-            ? settings.cameraZoom
-            : DEFAULT_TIMELINE_SETTINGS.cameraZoom,
-        lineLengthUnit: settings.lineLengthUnit === 'mi' ? 'mi' : 'km',
-    };
+export interface ActionRow {
+    id: string;
+    /** 日期 (年月日) */
+    date: string;
+    /** 已开通线路ID列表 (引用 LineGroup.id) */
+    activeLineIds: string[];
+    /** 备注 */
+    remark: string;
+    /** 动作类型: 开通/停运/全览/等待/聚焦 */
+    actionType: 'open' | 'close' | 'overview' | 'wait' | 'focus';
+    /** 动作参数：开通/停运关联的线路段ID (引用 TimelineLine.id) */
+    actionLineId?: string;
+    /** 动作时长 (秒, 支持小数) - 所有动作类型都支持 */
+    actionDuration?: number;
+    /** 开通/停运时车站动画时长（秒，默认 1 秒） */
+    nodeAnimationDuration?: number;
+    /** 停运后多版本换乘站的显示与版本配置（仅停运有效） */
+    closeNodeStyles?: Record<NodeId, CloseNodeStyle>;
+    /** 是否与上一动作同时开始 */
+    withPrevious?: boolean;
+    /** 是否快速完成开通/停运动作 */
+    quickComplete?: boolean;
+    /** 是否使用建议时长（开通/停运时根据线路长度自动计算动作时长） */
+    useSuggestedDuration?: boolean;
+}
+
+export type DiffAction = 'add' | 'update' | 'remove';
+
+export interface NodeDiff {
+    action: DiffAction;
+    id: string;
+    attrs?: Partial<NodeAttributes>;
+}
+
+export interface EdgeDiff {
+    action: DiffAction;
+    id: string;
+    source?: string;
+    target?: string;
+    attrs?: Partial<EdgeAttributes>;
+}
+
+export interface GraphDiff {
+    action: DiffAction;
+    attrs?: Partial<GraphAttributes>;
+}
+
+export interface TimelineDiff {
+    time: number;
+    nodes: NodeDiff[];
+    edges: EdgeDiff[];
+    graph: GraphDiff[];
+}
+
+export interface TimelineState {
+    enabled: boolean;
+    totalDuration: number;
+    currentTime: number;
+    dateRows: DateRow[];
+    /** 线路列表（第一级） */
+    groups: LineGroup[];
+    /** 线路段列表（第二级，每个段归属一个线路） */
+    lines: TimelineLine[];
+    /** 动作列表 */
+    actionRows: ActionRow[];
+    /** 未保存的新动作草稿日期（让撤销栈也能追踪未保存的表单数据） */
+    unsavedDate: string;
+    diffs: TimelineDiff[];
+    baseGraph: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
+    undoStack: Array<{
+        order: number;
+        dateRows: DateRow[];
+        groups: LineGroup[];
+        lines: TimelineLine[];
+        actionRows: ActionRow[];
+        unsavedDate: string;
+        diffs: TimelineDiff[];
+        enabled?: boolean;
+        totalDuration?: number;
+        currentTime?: number;
+        baseGraph?: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
+    }>;
+    redoStack: Array<{
+        order: number;
+        dateRows: DateRow[];
+        groups: LineGroup[];
+        lines: TimelineLine[];
+        actionRows: ActionRow[];
+        unsavedDate: string;
+        diffs: TimelineDiff[];
+        enabled?: boolean;
+        totalDuration?: number;
+        currentTime?: number;
+        baseGraph?: SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
+    }>;
+    /** 撤销操作发生后标记，用于通知组件关闭校验开关避免数据冲突 */
+    validationUndoPending: boolean;
+}
+
+export const TIMELINE_DEFAULTS: Omit<TimelineState, 'baseGraph'> = {
+    enabled: false,
+    totalDuration: 60,
+    currentTime: 0,
+    dateRows: [],
+    groups: [],
+    lines: [],
+    actionRows: [],
+    unsavedDate: '',
+    diffs: [],
+    undoStack: [],
+    redoStack: [],
+    validationUndoPending: false,
 };
-
-export const createEmptyTimelineDocument = (): TimelineDocument => ({
-    version: TIMELINE_DOCUMENT_VERSION,
-    track: [],
-    settings: { ...DEFAULT_TIMELINE_SETTINGS },
-});
-
-export const isNodeTimelineEntry = (id: Id): id is NodeId => !id.startsWith('line_');
-
-export const isElementEntry = (entry: TimelineEntry): entry is TimelineElementEntry =>
-    entry.kind === 'node' || entry.kind === 'edge';
-
-export const isKeyframeEntry = (entry: TimelineEntry): entry is TimelineKeyframeEntry => entry.kind === 'keyframe';
-
-export const isPauseEntry = (entry: TimelineEntry): entry is TimelinePauseEntry => entry.kind === 'pause';
-export const isAudioEntry = (entry: TimelineAudioEntry): entry is TimelineAudioEntry => entry.kind === 'audio';

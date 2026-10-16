@@ -2,8 +2,7 @@ import { RmgThemeProvider } from '@railmapgen/rmg-components';
 import { fireEvent, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MAP_MAX_VIEWBOX_ZOOM } from '../../map/map-config';
-import { createStore } from '../../redux';
-import store from '../../redux/store';
+import store, { createStore } from '../../redux';
 import { render } from '../../test-utils';
 import { ZoomPopover } from './zoom-popover';
 

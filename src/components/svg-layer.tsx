@@ -14,7 +14,6 @@ import { default as allStations } from './svgs/stations/stations';
 interface SvgLayerProps {
     elements: Element[];
     selected: Set<Id>;
-    highlighted?: Set<Id>;
     handlePointerDown: (node: NodeId, e: React.PointerEvent<SVGElement>) => void;
     handlePointerMove: (node: NodeId, e: React.PointerEvent<SVGElement>) => void;
     handlePointerUp: (node: NodeId, e: React.PointerEvent<SVGElement>) => void;
@@ -34,14 +33,13 @@ const SvgLayer = React.memo(
         const {
             elements,
             selected,
-            highlighted,
             handlePointerDown,
             handlePointerMove,
             handlePointerUp,
             handleEdgePointerDown,
             handleEdgeDoubleClick,
-            mapEnabled = false,
-            isSubscriber = true,
+            mapEnabled,
+            isSubscriber,
         } = props;
 
         const layers = Object.fromEntries(
@@ -52,23 +50,15 @@ const SvgLayer = React.memo(
         );
         for (const element of elements) {
             const isSelected = selected.has(element.id);
-            const isHighlighted = highlighted?.has(element.id);
-            const glowClassName = isSelected
-                ? 'rmp-selected-glow'
-                : isHighlighted
-                  ? 'rmp-timeline-missing-glow'
-                  : undefined;
 
             if (element.type === 'line') {
                 const id = element.id as LineId;
                 const type = element.line!.attr.type;
                 const style = element.line!.attr.style;
-                const edgeVisible = element.line!.attr.visible ?? true;
                 const effectiveEdgeVisible =
-                    (element.line!.attr.visible ?? true) &&
-                    isLinePolicyVisible(element.line!.attr, mapEnabled, isSubscriber);
+                    element.line!.attr.visible && isLinePolicyVisible(element.line!.attr, mapEnabled, isSubscriber);
                 const wrapperProps = {
-                    className: effectiveEdgeVisible ? glowClassName : 'removeMe',
+                    className: effectiveEdgeVisible ? (isSelected ? 'rmp-selected-glow' : undefined) : 'removeMe',
                     filter: effectiveEdgeVisible ? undefined : 'url(#invisible)',
                 };
                 const styleAttrs = element.line!.attr[style] as NonNullable<
@@ -134,9 +124,9 @@ const SvgLayer = React.memo(
                 const id = element.id as StnId;
                 const attr = element.station!;
                 const type = attr.type as StationType;
-                const visible = attr.visible ?? true;
+                const visible = attr.visible;
                 const wrapperProps = {
-                    className: visible ? glowClassName : 'removeMe',
+                    className: visible ? (isSelected ? 'rmp-selected-glow' : undefined) : 'removeMe',
                     filter: visible ? undefined : 'url(#invisible)',
                 };
 
@@ -202,9 +192,9 @@ const SvgLayer = React.memo(
                 const id = element.id as MiscNodeId;
                 const attr = element.miscNode!;
                 const type = attr.type as MiscNodeType;
-                const visible = attr.visible ?? true;
+                const visible = attr.visible;
                 const wrapperProps = {
-                    className: visible ? glowClassName : 'removeMe',
+                    className: visible ? (isSelected ? 'rmp-selected-glow' : undefined) : 'removeMe',
                     filter: visible ? undefined : 'url(#invisible)',
                 };
 
@@ -281,7 +271,6 @@ const SvgLayer = React.memo(
     (prevProps, nextProps) =>
         prevProps.elements === nextProps.elements &&
         prevProps.selected === nextProps.selected &&
-        prevProps.highlighted === nextProps.highlighted &&
         prevProps.mapEnabled === nextProps.mapEnabled &&
         prevProps.isSubscriber === nextProps.isSubscriber
 );

@@ -4,8 +4,15 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { MdInsertDriveFile, MdNoteAdd, MdOpenInNew, MdSchool, MdUpload } from 'react-icons/md';
 import { Events, LocalStorageKey } from '../../constants/constants';
+import { GlobalAlertId } from '../../constants/global-alerts';
 import { useRootDispatch, useRootSelector } from '../../redux';
-import { saveGraph, setSvgViewBoxMin, setSvgViewBoxZoom } from '../../redux/param/param-slice';
+import {
+    saveGraph,
+    setMapEnabled,
+    setMapStyle,
+    setSvgViewBoxMin,
+    setSvgViewBoxZoom,
+} from '../../redux/param/param-slice';
 import { clearSelected, refreshEdgesThunk, refreshNodesThunk, setGlobalAlert } from '../../redux/runtime/runtime-slice';
 import { clearTimelineData, loadTimeline } from '../../redux/timeline/timeline-slice';
 import { getCanvasSize } from '../../util/helpers';
@@ -51,6 +58,8 @@ export default function OpenActions() {
     const handleNew = () => {
         dispatch(clearSelected());
         graph.current.clear();
+        // 新建项目隐藏地图（地图样式保持当前不变）。
+        dispatch(setMapEnabled(false));
         dispatch(setSvgViewBoxZoom(100));
         dispatch(setSvgViewBoxMin({ x: 0, y: 0 }));
         // 新建项目需同时清空时间线配置（启用状态、日期、动作、基准图等），
@@ -119,6 +128,9 @@ export default function OpenActions() {
 
         // load svg view box related settings from the save
         const { svgViewBoxZoom, svgViewBoxMin } = save;
+        // restore map settings from the save
+        if (typeof save.mapEnabled === 'boolean') dispatch(setMapEnabled(save.mapEnabled));
+        if (save.mapStyle) dispatch(setMapStyle(structuredClone(save.mapStyle)));
         if (typeof svgViewBoxZoom === 'number') dispatch(setSvgViewBoxZoom(svgViewBoxZoom));
         if (typeof svgViewBoxMin.x === 'number' && typeof svgViewBoxMin.y === 'number')
             dispatch(setSvgViewBoxMin(svgViewBoxMin));
@@ -148,7 +160,13 @@ export default function OpenActions() {
         logger.debug('OpenActions.handleUpload():: received file', file);
 
         if (file?.type !== 'application/json') {
-            dispatch(setGlobalAlert({ status: 'error', message: t('header.open.invalidType') }));
+            dispatch(
+                setGlobalAlert({
+                    id: GlobalAlertId.OpenInvalidFileType,
+                    status: 'error',
+                    message: t('header.open.invalidType'),
+                })
+            );
             logger.error('OpenActions.handleUpload():: Invalid file type! Only file in JSON format is accepted.');
         } else {
             try {
@@ -158,7 +176,13 @@ export default function OpenActions() {
                 setVersionToLoad(version);
                 onConfirmOpen();
             } catch (err) {
-                dispatch(setGlobalAlert({ status: 'error', message: t('header.open.unknownError') }));
+                dispatch(
+                    setGlobalAlert({
+                        id: GlobalAlertId.OpenFileFailed,
+                        status: 'error',
+                        message: t('header.open.unknownError'),
+                    })
+                );
                 logger.error(
                     'OpenActions.handleUpload():: Unknown error occurred while parsing the uploaded file',
                     err

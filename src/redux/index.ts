@@ -39,12 +39,15 @@ export const createStore = (preloadedState: Partial<RootState> = {}) =>
             ),
         preloadedState,
     });
-export type RootStore = ReturnType<typeof createStore>;
+const store = createStore();
+export type RootStore = typeof store;
 
-export type RootDispatch = RootStore['dispatch'];
+export type RootDispatch = typeof store.dispatch;
 export const useRootDispatch = () => useDispatch<RootDispatch>();
 export const useRootSelector: TypedUseSelectorHook<RootState> = useSelector;
 export const useRootStore = () => useStore() as RootStore;
 
 type RootStartListening = TypedStartListening<RootState, RootDispatch>;
 export const startRootListening = listenerMiddleware.startListening as RootStartListening;
+
+export default store;

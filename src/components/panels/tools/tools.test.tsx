@@ -3,8 +3,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import React from 'react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LinePathType, LineStyleType } from '../../../constants/lines';
-import { createStore } from '../../../redux';
-import store from '../../../redux/store';
+import store, { createStore } from '../../../redux';
 import { render } from '../../../test-utils';
 import ToolsPanel from './tools';
 
@@ -76,7 +75,7 @@ describe('ToolsPanel contextual line access', () => {
         expect(screen.getByRole('button', { name: LinePathType.Bezier, hidden: true })).toBeDisabled();
         expect(screen.getByRole('button', { name: LinePathType.Freeform, hidden: true })).toBeDisabled();
         expect(screen.getByRole('button', { name: LinePathType.RayGuided, hidden: true })).toBeDisabled();
-        expect(screen.queryByRole('button', { name: LinePathType.Simple, hidden: true })).toBeNull();
+        expect(screen.getByRole('button', { name: LinePathType.Simple, hidden: true })).toBeDisabled();
     });
 
     it('disables diagram-native and static Pro paths for free users while the map is shown', () => {
@@ -86,14 +85,14 @@ describe('ToolsPanel contextual line access', () => {
         expect(screen.getByRole('button', { name: LinePathType.Bezier, hidden: true })).toBeEnabled();
         expect(screen.getByRole('button', { name: LinePathType.Freeform, hidden: true })).toBeEnabled();
         expect(screen.getByRole('button', { name: LinePathType.RayGuided, hidden: true })).toBeDisabled();
+        expect(screen.getByRole('button', { name: LinePathType.Simple, hidden: true })).toBeDisabled();
     });
 
     it('uses an allowed map-native fallback for a free user selecting a style', () => {
         const testStore = renderToolsPanel(true, false);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Line Styles', hidden: true }));
-        fireEvent.click(screen.getByRole('button', { name: 'Single color style', hidden: true }));
+        fireEvent.click(screen.getByRole('button', { name: LineStyleType.SingleColor, hidden: true }));
 
-        expect(testStore.getState().runtime.mode).toBe(`line-${LinePathType.Diagonal}/${LineStyleType.SingleColor}`);
+        expect(testStore.getState().runtime.mode).toBe(`line-${LinePathType.Bezier}/${LineStyleType.SingleColor}`);
     });
 });

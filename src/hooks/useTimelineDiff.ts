@@ -83,7 +83,7 @@ export const useTimelineDiff = () => {
                 node.attributes = {
                     ...node.attributes,
                     versions,
-                };
+                } as NodeAttributes;
             }
         });
 

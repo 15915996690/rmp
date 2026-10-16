@@ -4,8 +4,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EdgeAttributes, GraphAttributes, NodeAttributes } from '../../../constants/constants';
 import { MiscNodeType } from '../../../constants/nodes';
-import { createStore } from '../../../redux';
-import store from '../../../redux/store';
+import store, { createStore } from '../../../redux';
 import { render } from '../../../test-utils';
 import InfoMultipleSection from './info-multiple-selection';
 
@@ -41,7 +40,7 @@ describe('InfoMultipleSection visibility', () => {
         const mockStore = createStore({
             param: {
                 ...realState.param,
-                present: window.graph.export(),
+                present: { ...realState.param.present, graph: window.graph.export() },
             },
             runtime: {
                 ...realState.runtime,

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { NodeId } from '../constants/constants';
 import { useRootDispatch } from '../redux';
 import { saveGraph } from '../redux/param/param-slice';
 import { syncCurrentNodeVersion } from './timeline';
@@ -12,9 +13,11 @@ export const useGraphEvents = () => {
     const graph = useRef(window.graph);
 
     useEffect(() => {
-        function onEvent(nodeId?: string) {
+        // All graphology lifecycle events carry the element key (or undefined for the initial call).
+        function onEvent(payload: { key?: string } = {}) {
+            const nodeId = payload.key;
             if (nodeId && window.graph.hasNode(nodeId)) {
-                syncCurrentNodeVersion(window.graph, nodeId);
+                syncCurrentNodeVersion(window.graph, nodeId as NodeId);
             }
             dispatch(saveGraph(window.graph.export()));
         }

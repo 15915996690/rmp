@@ -6,10 +6,11 @@ import { useTranslation } from 'react-i18next';
 import { AttrsProps, CityCode } from '../../../constants/constants';
 import { MiscNodeType, Node, NodeComponentProps } from '../../../constants/nodes';
 import { Rotate } from '../../../constants/stations';
+import { useRootDispatch } from '../../../redux';
+import { loadFont } from '../../../redux/fonts/fonts-slice';
 import { getLangStyle, TextLanguage } from '../../../util/fonts';
 import { ColorAttribute, ColorField } from '../../panels/details/color-field';
 import { MultilineText } from '../common/multiline-text';
-import { useSvgRenderContext } from '../../svg-render-context';
 
 const languageWithoutSynthesis: Set<TextLanguage> = new Set([
     TextLanguage.zh,
@@ -19,7 +20,7 @@ const languageWithoutSynthesis: Set<TextLanguage> = new Set([
 ]);
 
 const Text = (props: NodeComponentProps<TextAttributes>) => {
-    const { ensureFont } = useSvgRenderContext();
+    const dispatch = useRootDispatch();
     const { id, x, y, attrs, handlePointerDown, handlePointerMove, handlePointerUp } = props;
     const {
         content = defaultTextAttributes.content,
@@ -57,8 +58,8 @@ const Text = (props: NodeComponentProps<TextAttributes>) => {
     );
 
     React.useEffect(() => {
-        ensureFont(language);
-    }, [ensureFont, language]);
+        dispatch(loadFont(language));
+    }, [language]);
 
     const onPointerDown = React.useCallback(
         (e: React.PointerEvent<SVGElement>) => handlePointerDown(id, e),

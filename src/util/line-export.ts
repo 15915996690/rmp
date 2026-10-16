@@ -4,13 +4,15 @@ import type { EdgeAttributes, GraphAttributes, NodeAttributes, Theme } from '../
 import type { LineDefinition } from '../constants/line-definitions';
 import type { RMGParam } from '../constants/rmg';
 import { getLineTheme, getLineTopology, LineTopology } from './line-definitions';
+import { resolveVirtualNodeReferences } from './virtual-node-station';
 import { toRmg } from './to-rmg';
 
 type Graph = SerializedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>;
 type Transfer = { id: string; theme: Theme; name: [string, string] };
 
 const getTransfers = (graph: Graph): Map<string, Transfer[]> => {
-    const edges = new Map(graph.edges.map(edge => [edge.key!, edge]));
+    const resolvedGraph = resolveVirtualNodeReferences(graph);
+    const edges = new Map(resolvedGraph.edges.map(edge => [edge.key!, edge]));
     const result = new Map<string, Transfer[]>();
     for (const line of graph.attributes?.lineDefinitions ?? []) {
         const stations = new Set(
@@ -35,13 +37,19 @@ export interface LineExport {
 
 /** Convert one owned subgraph, then resolve transfers by stable line identity, including same-colour lines. */
 const buildLineExport = (graph: Graph, line: LineDefinition, transfers: Map<string, Transfer[]>): LineExport => {
-    const topology = getLineTopology(graph, line);
+    const resolvedGraph = resolveVirtualNodeReferences(graph);
+    const topology = getLineTopology(resolvedGraph, line);
     if (topology.stationIds.length < 2)
         return { line, topology, startCandidates: topology.startCandidates, error: 'insufficientStations' };
     const owned = new Set(line.edgeIds);
-    const edges = graph.edges.filter(edge => owned.has(edge.key!));
+    const edges = resolvedGraph.edges.filter(edge => owned.has(edge.key!));
     const nodeIds = new Set(edges.flatMap(edge => [edge.source, edge.target]));
-    const subset = { ...graph, attributes: {}, nodes: graph.nodes.filter(node => nodeIds.has(node.key)), edges };
+    const subset = {
+        ...resolvedGraph,
+        attributes: {},
+        nodes: resolvedGraph.nodes.filter(node => nodeIds.has(node.key)),
+        edges,
+    };
     let converted: ReturnType<typeof toRmg>[number]['param'];
     try {
         converted = toRmg(MultiDirectedGraph.from(structuredClone(subset)))
@@ -72,5 +80,6 @@ export const getLineExport = (graph: Graph, line: LineDefinition): LineExport =>
 
 export const getLineExports = (graph: Graph): LineExport[] => {
     const transfers = getTransfers(graph);
-    return (graph.attributes?.lineDefinitions ?? []).map(line => buildLineExport(graph, line, transfers));
+    const lines = graph.attributes?.lineDefinitions ?? [];
+    return lines.map(line => buildLineExport(graph, line, transfers));
 };
