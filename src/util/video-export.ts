@@ -850,6 +850,25 @@ const applyNodeRevealAnimation = (
     });
 };
 
+/**
+ * 把画布上计算好的站名位置同步到导出帧中的节点。
+ * 只有正在渲染的就是该节点当前生效的版本时才同步：历史版本必须使用自身保存的
+ * preciseNameOffsets，否则切换车站历史版本后站名偏移不会更新。
+ * 返回是否执行了同步。
+ */
+export const syncStationNameLayout = (
+    renderedName: Element | null,
+    canvasName: Element | null,
+    renderedVersion: number,
+    liveVersion: number
+): boolean => {
+    if (!renderedName || !canvasName || renderedVersion !== liveVersion) return false;
+
+    renderedName.setAttribute('transform', canvasName.getAttribute('transform') ?? '');
+    renderedName.setAttribute('text-anchor', canvasName.getAttribute('text-anchor') ?? 'middle');
+    return true;
+};
+
 // ── Camera system ──────────────────────────────────────────────────────────────
 
 const getNodeFocusPoint = (
@@ -1508,20 +1527,18 @@ const createFrameSVG = async (
                 ).documentElement.firstElementChild;
             };
             const currentName = currentElement.querySelector<SVGGElement>(`#stn_name_${nodeId}`);
-            const applyNameLayout = (element: Element | null) => {
-                if (!currentName || !element) return;
+            const liveVersion = Number(graph.getNodeAttribute(nodeId, 'currentVersion') ?? 1);
+            const applyNameLayout = (element: Element | null, version: number) => {
+                if (!element) return;
 
                 const renderedName = element.querySelector<SVGGElement>('[id^="stn_name_"]');
-                if (!renderedName) return;
-
-                renderedName.setAttribute('transform', currentName.getAttribute('transform') ?? '');
-                renderedName.setAttribute('text-anchor', currentName.getAttribute('text-anchor') ?? 'middle');
+                syncStationNameLayout(renderedName, currentName, version, liveVersion);
                 // 只同步位置，不覆盖版本自身生成的中英文文本结构；覆盖 innerHTML 会把中文向上、英文向下的 dy 和基线一起带到另一个版本，
                 // Safari/iPad 在复制后的 SVG 中会重新计算出错位布局。
             };
             const parsed = renderVersion(versionNumber, nodeId);
             if (parsed) {
-                applyNameLayout(parsed);
+                applyNameLayout(parsed, versionNumber);
                 currentElement.setAttribute('transform', `translate(${snapshot.x}, ${snapshot.y})`);
                 currentElement.innerHTML = parsed.innerHTML;
                 elem.getElementById(`${nodeId}.pre`)?.remove();
@@ -1530,7 +1547,7 @@ const createFrameSVG = async (
                 if (transition && transition.from !== versionNumber) {
                     const oldElement = renderVersion(transition.from, `${nodeId}.history-old`);
                     if (oldElement) {
-                        applyNameLayout(oldElement);
+                        applyNameLayout(oldElement, transition.from);
                         oldElement.setAttribute('opacity', `${1 - transition.progress}`);
                         oldElement.setAttribute('pointer-events', 'none');
                         currentElement.setAttribute('opacity', `${transition.progress}`);

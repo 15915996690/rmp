@@ -10,6 +10,7 @@ import {
     getActionLineMinimumDuration,
     getActionLineSuggestedDuration,
     isNodeConnectedToPreviousEdge,
+    syncStationNameLayout,
 } from './video-export';
 
 const makeGraph = () => new MultiDirectedGraph<NodeAttributes, EdgeAttributes, GraphAttributes>();
@@ -88,6 +89,32 @@ describe('isNodeConnectedToPreviousEdge', () => {
                 { id: 'stn_c', kind: 'node', reverse: false },
             ], 1)
         ).toBe(false);
+    });
+});
+
+describe('syncStationNameLayout', () => {
+    const parseNameElement = (transform: string, anchor: string) =>
+        new DOMParser().parseFromString(
+            `<svg xmlns="http://www.w3.org/2000/svg"><g id="stn_name_stn_a" transform="${transform}" text-anchor="${anchor}"/></svg>`,
+            'image/svg+xml'
+        ).documentElement.firstElementChild;
+
+    it('历史版本保留自身保存的站名偏移，不被当前版本布局覆盖', () => {
+        const rendered = parseNameElement('translate(-50, -20)', 'end');
+        const canvas = parseNameElement('translate(13.33, -16.67)', 'start');
+
+        expect(syncStationNameLayout(rendered, canvas, 2, 1)).toBe(false);
+        expect(rendered?.getAttribute('transform')).toBe('translate(-50, -20)');
+        expect(rendered?.getAttribute('text-anchor')).toBe('end');
+    });
+
+    it('当前生效版本沿用画布布局，保持导出与编辑器一致', () => {
+        const rendered = parseNameElement('translate(0, 0)', 'middle');
+        const canvas = parseNameElement('translate(13.33, -16.67)', 'start');
+
+        expect(syncStationNameLayout(rendered, canvas, 2, 2)).toBe(true);
+        expect(rendered?.getAttribute('transform')).toBe('translate(13.33, -16.67)');
+        expect(rendered?.getAttribute('text-anchor')).toBe('start');
     });
 });
 
