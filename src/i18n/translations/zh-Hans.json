@@ -18,7 +18,11 @@
                 "collector": "集散道路",
                 "arterial": "主干道"
             },
-            "rails": { "title": "铁路", "metro": "地铁", "national": "国铁" },
+            "rails": {
+                "title": "铁路",
+                "metro": "地铁",
+                "national": "国铁"
+            },
             "labels": {
                 "title": "标注",
                 "enabled": "显示所有标注",
@@ -75,7 +79,6 @@
     "ok": "确定",
     "noShowAgain": "不再显示",
     "rmtPromotion": "您绝对不想错过的全能工具包！",
-
     "panel": {
         "tools": {
             "showLess": "显示更少",
@@ -360,6 +363,16 @@
                     "createSquare": "创建正方形",
                     "createTriangle": "创建三角形",
                     "createCircle": "创建圆形"
+                },
+                "taipeiLightRailLineBadge": {
+                    "displayName": "台北轻轨线路标识"
+                },
+                "taipeiMaokongGondolaBadge": {
+                    "displayName": "台北猫空缆车标识"
+                },
+                "taiwanRailwayArrow": {
+                    "displayName": "台铁端点箭头",
+                    "outlined": "黑色边框"
                 }
             },
             "stations": {
@@ -630,6 +643,32 @@
                     "displayName": "杭州地铁换乘车站",
                     "mirror": "图标镜像",
                     "scale": "站名横向缩放"
+                },
+                "taipeiMetroBasic": {
+                    "displayName": "台北捷运基本车站"
+                },
+                "taipeiMetroInt": {
+                    "displayName": "台北捷运换乘车站"
+                },
+                "taipeiLightRail": {
+                    "displayName": "台北轻轨车站",
+                    "codeLayout": "编号排版",
+                    "codeInline": "单行（V11）",
+                    "codeStacked": "双行（LB / 12）",
+                    "textOpacity": "文字不透明度"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "台北猫空缆车车站"
+                },
+                "taipeiCommon": {
+                    "nameOffset": "站名位置",
+                    "secondaryNameZh": "第二站名（中文）",
+                    "secondaryNameEn": "第二站名（英文）",
+                    "secondaryNameOnNewLine": "换行展示第二名称",
+                    "filled": "实心编号牌",
+                    "align": "编号牌排列",
+                    "horizontal": "横向",
+                    "vertical": "纵向"
                 }
             },
             "lines": {
@@ -833,6 +872,21 @@
                     "moveLayerUp": "上移线层",
                     "moveLayerDown": "下移线层",
                     "removeLayer": "删除线层"
+                },
+                "taipeiLightRail": {
+                    "displayName": "台北轻轨"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "台北猫空缆车"
+                },
+                "taipeiMetroOutOfStation": {
+                    "displayName": "台北捷运出站换乘"
+                },
+                "taipeiTaiwanRailway": {
+                    "displayName": "台铁线路（台北）"
+                },
+                "taipeiMaokongGondolaTransfer": {
+                    "displayName": "猫空缆车步行连接线"
                 }
             },
             "edges": {},
@@ -866,10 +920,13 @@
                 "versionName": "版本名称",
                 "versionNotFound": "版本不存在或无法获取",
                 "applySuccess": "已应用版本 {version}"
+            },
+            "taipeiOpacity": {
+                "preset": "预设",
+                "opaque": "不透明"
             }
         }
     },
-
     "header": {
         "lineInfo": {
             "title": "线路信息设置",
@@ -1237,7 +1294,6 @@
             "slackContent": "在这些Slack频道中讨论!"
         }
     },
-
     "contextMenu": {
         "refresh": "刷新",
         "cut": "剪切",
@@ -1256,7 +1312,6 @@
         "flipDiagonal135": "沿135°线翻转",
         "reconcile": "合并线段"
     },
-
     "clipboard": {
         "errors": {
             "readText": "无法读取剪贴板。请检查浏览器权限后重试。",
@@ -1264,9 +1319,7 @@
             "cannotPasteSpecificAttrs": "无法粘贴独特属性。请确认已选中兼容的对象，且剪贴板中包含有效的独特属性数据。"
         }
     },
-
     "localStorageQuotaExceeded": "本地存储空间已达上限。无法保存新更改。",
-
     "timeline": {
         "editor": {
             "title": "动画时间线"

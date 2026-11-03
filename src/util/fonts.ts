@@ -35,12 +35,18 @@ export const Node2Font: {
     [StationType.OsakaMetro]: [TextLanguage.tokyo_ja, TextLanguage.berlin],
     [StationType.LondonTubeBasic]: [TextLanguage.tube],
     [StationType.LondonTubeInt]: [TextLanguage.tube],
+    [StationType.TaipeiMetroBasic]: [TextLanguage.taipei],
+    [StationType.TaipeiMetroInt]: [TextLanguage.taipei],
+    [StationType.TaipeiLightRail]: [TextLanguage.taipei],
+    [StationType.TaipeiMaokongGondola]: [TextLanguage.taipei],
     [MiscNodeType.BerlinSBahnLineBadge]: [TextLanguage.berlin],
     [MiscNodeType.BerlinUBahnLineBadge]: [TextLanguage.berlin],
     [MiscNodeType.JREastLineBadge]: [TextLanguage.jreast_ja],
     [MiscNodeType.MRTDestinationNumbers]: [TextLanguage.mrt],
     [MiscNodeType.MRTLineBadge]: [TextLanguage.mrt],
     [MiscNodeType.TaiPeiMetroLineBadege]: [TextLanguage.taipei],
+    [MiscNodeType.TaipeiLightRailLineBadge]: [TextLanguage.taipei],
+    [MiscNodeType.TaipeiMaokongGondolaBadge]: [TextLanguage.taipei],
     [MiscNodeType.LondonTubeLineBadge]: [TextLanguage.tube],
 };
 

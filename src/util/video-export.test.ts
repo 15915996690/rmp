@@ -49,10 +49,14 @@ describe('isNodeConnectedToPreviousEdge', () => {
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
 
         expect(
-            isNodeConnectedToPreviousEdge(graph, [
-                { id: 'line_ab', kind: 'edge', reverse: false },
-                { id: 'stn_b', kind: 'node', reverse: false },
-            ], 1)
+            isNodeConnectedToPreviousEdge(
+                graph,
+                [
+                    { id: 'line_ab', kind: 'edge', reverse: false },
+                    { id: 'stn_b', kind: 'node', reverse: false },
+                ],
+                1
+            )
         ).toBe(true);
     });
 
@@ -69,10 +73,14 @@ describe('isNodeConnectedToPreviousEdge', () => {
         addEdge(graph, 'line_virtual', 'misc_node_virtual', 'stn_a');
 
         expect(
-            isNodeConnectedToPreviousEdge(graph, [
-                { id: 'line_virtual', kind: 'edge', reverse: false },
-                { id: 'stn_a', kind: 'node', reverse: false },
-            ], 1)
+            isNodeConnectedToPreviousEdge(
+                graph,
+                [
+                    { id: 'line_virtual', kind: 'edge', reverse: false },
+                    { id: 'stn_a', kind: 'node', reverse: false },
+                ],
+                1
+            )
         ).toBe(true);
     });
 
@@ -84,10 +92,14 @@ describe('isNodeConnectedToPreviousEdge', () => {
         addEdge(graph, 'line_ab', 'stn_a', 'stn_b');
 
         expect(
-            isNodeConnectedToPreviousEdge(graph, [
-                { id: 'line_ab', kind: 'edge', reverse: false },
-                { id: 'stn_c', kind: 'node', reverse: false },
-            ], 1)
+            isNodeConnectedToPreviousEdge(
+                graph,
+                [
+                    { id: 'line_ab', kind: 'edge', reverse: false },
+                    { id: 'stn_c', kind: 'node', reverse: false },
+                ],
+                1
+            )
         ).toBe(false);
     });
 });

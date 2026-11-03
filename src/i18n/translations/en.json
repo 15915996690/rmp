@@ -18,7 +18,11 @@
                 "collector": "Collector",
                 "arterial": "Arterial"
             },
-            "rails": { "title": "Railways", "metro": "Metro", "national": "National railway" },
+            "rails": {
+                "title": "Railways",
+                "metro": "Metro",
+                "national": "National railway"
+            },
             "labels": {
                 "title": "Labels",
                 "enabled": "Show all labels",
@@ -75,7 +79,6 @@
     "ok": "OK",
     "noShowAgain": "Don't show me again",
     "rmtPromotion": "The all-in-one toolkit you definitely do not want to miss!",
-
     "panel": {
         "tools": {
             "showLess": "Show less",
@@ -361,6 +364,16 @@
                     "createSquare": "Create square",
                     "createTriangle": "Create triangle",
                     "createCircle": "Create circle"
+                },
+                "taipeiLightRailLineBadge": {
+                    "displayName": "Taipei light rail line badge"
+                },
+                "taipeiMaokongGondolaBadge": {
+                    "displayName": "Taipei Maokong Gondola badge"
+                },
+                "taiwanRailwayArrow": {
+                    "displayName": "Taiwan Railway endpoint arrows",
+                    "outlined": "Black border"
                 }
             },
             "stations": {
@@ -632,6 +645,32 @@
                     "displayName": "Hangzhou Metro interchange station",
                     "mirror": "Icon mirroring",
                     "scale": "Names horizontal scale"
+                },
+                "taipeiMetroBasic": {
+                    "displayName": "Taipei Metro basic station"
+                },
+                "taipeiMetroInt": {
+                    "displayName": "Taipei Metro interchange station"
+                },
+                "taipeiLightRail": {
+                    "displayName": "Taipei light rail station",
+                    "codeLayout": "Code layout",
+                    "codeInline": "Single line (V11)",
+                    "codeStacked": "Two lines (LB / 12)",
+                    "textOpacity": "Text opacity"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "Taipei Maokong Gondola station"
+                },
+                "taipeiCommon": {
+                    "nameOffset": "Station name position",
+                    "secondaryNameZh": "Secondary name (Chinese)",
+                    "secondaryNameEn": "Secondary name (English)",
+                    "secondaryNameOnNewLine": "Show secondary name on a new line",
+                    "filled": "Filled number plate",
+                    "align": "Number plate arrangement",
+                    "horizontal": "Horizontal",
+                    "vertical": "Vertical"
                 }
             },
             "lines": {
@@ -835,6 +874,21 @@
                     "moveLayerUp": "Move layer up",
                     "moveLayerDown": "Move layer down",
                     "removeLayer": "Remove layer"
+                },
+                "taipeiLightRail": {
+                    "displayName": "Taipei light rail"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "Taipei Maokong Gondola"
+                },
+                "taipeiMetroOutOfStation": {
+                    "displayName": "Taipei Metro out-of-station transfer"
+                },
+                "taipeiTaiwanRailway": {
+                    "displayName": "Taiwan Railway line (Taipei)"
+                },
+                "taipeiMaokongGondolaTransfer": {
+                    "displayName": "Maokong Gondola walking connection"
                 }
             },
             "edge": {},
@@ -868,10 +922,13 @@
                 "versionName": "Version Name",
                 "versionNotFound": "Version does not exist or cannot be retrieved",
                 "applySuccess": "Applied version {version}"
+            },
+            "taipeiOpacity": {
+                "preset": "Preset",
+                "opaque": "Opaque"
             }
         }
     },
-
     "header": {
         "lineInfo": {
             "title": "Line information settings",
@@ -1237,7 +1294,6 @@
             "slackContent": "Chat in these Slack channels!"
         }
     },
-
     "contextMenu": {
         "refresh": "Refresh",
         "cut": "Cut",
@@ -1256,7 +1312,6 @@
         "flipDiagonal135": "Flip across 135° line",
         "reconcile": "Reconcile"
     },
-
     "clipboard": {
         "errors": {
             "readText": "Failed to read the clipboard. Check browser permissions and try again.",
@@ -1264,7 +1319,6 @@
             "cannotPasteSpecificAttrs": "Unable to paste specific attributes. Make sure compatible targets are selected and the clipboard contains valid specific-attribute data."
         }
     },
-
     "timeline": {
         "editor": {
             "title": "Animation Timeline"
@@ -1353,6 +1407,5 @@
             "prepare": "Preparing..."
         }
     },
-
     "localStorageQuotaExceeded": "Local storage limit reached. Unable to save new changes."
 }

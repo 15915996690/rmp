@@ -18,7 +18,11 @@
                 "collector": "집산 도로",
                 "arterial": "간선 도로"
             },
-            "rails": { "title": "철도", "metro": "지하철", "national": "국철" },
+            "rails": {
+                "title": "철도",
+                "metro": "지하철",
+                "national": "국철"
+            },
             "labels": {
                 "title": "라벨",
                 "enabled": "모든 라벨 표시",
@@ -75,7 +79,6 @@
     "ok": "확인",
     "noShowAgain": "표시하지 않기",
     "rmtPromotion": "놓치고 싶지 않은 올인원 툴킷! 닫기.",
-
     "panel": {
         "tools": {
             "showLess": "적게 표시",
@@ -360,6 +363,16 @@
                     "createSquare": "정사각형 만들기",
                     "createTriangle": "삼각형 만들기",
                     "createCircle": "원 만들기"
+                },
+                "taipeiLightRailLineBadge": {
+                    "displayName": "타이베이 경전철 노선 표지"
+                },
+                "taipeiMaokongGondolaBadge": {
+                    "displayName": "타이베이 마오콩 곤돌라 표지"
+                },
+                "taiwanRailwayArrow": {
+                    "displayName": "타이완 철도 끝점 화살표",
+                    "outlined": "검은색 테두리"
                 }
             },
             "stations": {
@@ -630,6 +643,32 @@
                     "displayName": "항저우 지하철 환승역",
                     "mirror": "아이콘 미러링",
                     "scale": "역명 가로 크기 조절"
+                },
+                "taipeiMetroBasic": {
+                    "displayName": "타이베이 지하철역 (일반)"
+                },
+                "taipeiMetroInt": {
+                    "displayName": "타이베이 지하철역 (환승)"
+                },
+                "taipeiLightRail": {
+                    "displayName": "타이베이 경전철역",
+                    "codeLayout": "역 번호 배치",
+                    "codeInline": "한 줄 (V11)",
+                    "codeStacked": "두 줄 (LB / 12)",
+                    "textOpacity": "텍스트 불투명도"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "타이베이 마오콩 곤돌라역"
+                },
+                "taipeiCommon": {
+                    "nameOffset": "역명 위치",
+                    "secondaryNameZh": "보조 역명 (중국어)",
+                    "secondaryNameEn": "보조 역명 (영어)",
+                    "secondaryNameOnNewLine": "보조 역명을 새 줄에 표시",
+                    "filled": "채워진 역 번호판",
+                    "align": "역 번호판 배치",
+                    "horizontal": "가로",
+                    "vertical": "세로"
                 }
             },
             "lines": {
@@ -833,6 +872,21 @@
                     "moveLayerUp": "레이어 위로 이동",
                     "moveLayerDown": "레이어 아래로 이동",
                     "removeLayer": "레이어 삭제"
+                },
+                "taipeiLightRail": {
+                    "displayName": "타이베이 경전철"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "타이베이 마오콩 곤돌라"
+                },
+                "taipeiMetroOutOfStation": {
+                    "displayName": "타이베이 지하철 개찰구 밖 환승"
+                },
+                "taipeiTaiwanRailway": {
+                    "displayName": "타이완 철도 노선 (타이베이)"
+                },
+                "taipeiMaokongGondolaTransfer": {
+                    "displayName": "마오콩 곤돌라 도보 연결선"
                 }
             },
             "edges": {},
@@ -866,10 +920,13 @@
                 "versionName": "버전 이름",
                 "versionNotFound": "버전이 존재하지 않거나 검색할 수 없습니다",
                 "applySuccess": "버전 {version}이(가) 적용되었습니다"
+            },
+            "taipeiOpacity": {
+                "preset": "프리셋",
+                "opaque": "불투명"
             }
         }
     },
-
     "header": {
         "lineInfo": {
             "title": "노선 정보 설정",
@@ -1237,7 +1294,6 @@
             "slackContent": "이 슬랙 채널에서 채팅해요!"
         }
     },
-
     "contextMenu": {
         "refresh": "새로 고침",
         "cut": "잘라내기",
@@ -1256,7 +1312,6 @@
         "flipDiagonal135": "135° 선을 기준으로 뒤집기",
         "reconcile": "통합"
     },
-
     "clipboard": {
         "errors": {
             "readText": "클립보드를 읽을 수 없습니다. 브라우저 권한을 확인한 뒤 다시 시도하세요.",
@@ -1264,7 +1319,6 @@
             "cannotPasteSpecificAttrs": "고유 속성을 붙여넣을 수 없습니다. 호환되는 대상을 선택했고 클립보드에 올바른 고유 속성 데이터가 있는지 확인하세요."
         }
     },
-
     "timeline": {
         "editor": {
             "title": "애니메이션 타임라인"
@@ -1353,6 +1407,5 @@
             "prepare": "준비 중..."
         }
     },
-
     "localStorageQuotaExceeded": "로컬 저장소 한도에 도달했습니다. 새로운 변경 사항을 저장할 수 없습니다."
 }

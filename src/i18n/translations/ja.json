@@ -18,7 +18,11 @@
                 "collector": "集散道路",
                 "arterial": "幹線道路"
             },
-            "rails": { "title": "鉄道", "metro": "地下鉄", "national": "国鉄" },
+            "rails": {
+                "title": "鉄道",
+                "metro": "地下鉄",
+                "national": "国鉄"
+            },
             "labels": {
                 "title": "ラベル",
                 "enabled": "すべてのラベルを表示",
@@ -77,7 +81,6 @@
     "ok": "OK",
     "noShowAgain": "次回表示しない",
     "rmtPromotion": "絶対に見逃せないオールインワンツールキット！",
-
     "panel": {
         "tools": {
             "showLess": "表示を減らす",
@@ -362,6 +365,16 @@
                     "createSquare": "正方形を作成",
                     "createTriangle": "三角形を作成",
                     "createCircle": "円を作成"
+                },
+                "taipeiLightRailLineBadge": {
+                    "displayName": "台北ライトレール路線標"
+                },
+                "taipeiMaokongGondolaBadge": {
+                    "displayName": "台北猫空ロープウェイ標識"
+                },
+                "taiwanRailwayArrow": {
+                    "displayName": "台湾鉄道の終端矢印",
+                    "outlined": "黒い枠線"
                 }
             },
             "stations": {
@@ -633,6 +646,32 @@
                     "displayName": "杭州メトロ乗り換え駅",
                     "mirror": "アイコンミラーリング",
                     "scale": "駅名の横方向スケール"
+                },
+                "taipeiMetroBasic": {
+                    "displayName": "台北メトロ駅（一般）"
+                },
+                "taipeiMetroInt": {
+                    "displayName": "台北メトロ駅（乗換）"
+                },
+                "taipeiLightRail": {
+                    "displayName": "台北ライトレール駅",
+                    "codeLayout": "駅番号の配置",
+                    "codeInline": "1行（V11）",
+                    "codeStacked": "2行（LB / 12）",
+                    "textOpacity": "文字の不透明度"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "台北猫空ロープウェイ駅"
+                },
+                "taipeiCommon": {
+                    "nameOffset": "駅名の位置",
+                    "secondaryNameZh": "副駅名（中国語）",
+                    "secondaryNameEn": "副駅名（英語）",
+                    "secondaryNameOnNewLine": "副駅名を改行して表示",
+                    "filled": "塗りつぶしの駅番号標",
+                    "align": "駅番号標の配置",
+                    "horizontal": "横方向",
+                    "vertical": "縦方向"
                 }
             },
             "lines": {
@@ -836,6 +875,21 @@
                     "moveLayerUp": "レイヤーを上へ移動",
                     "moveLayerDown": "レイヤーを下へ移動",
                     "removeLayer": "レイヤーを削除"
+                },
+                "taipeiLightRail": {
+                    "displayName": "台北ライトレール"
+                },
+                "taipeiMaokongGondola": {
+                    "displayName": "台北猫空ロープウェイ"
+                },
+                "taipeiMetroOutOfStation": {
+                    "displayName": "台北メトロ改札外乗換"
+                },
+                "taipeiTaiwanRailway": {
+                    "displayName": "台湾鉄道路線（台北）"
+                },
+                "taipeiMaokongGondolaTransfer": {
+                    "displayName": "猫空ロープウェイ徒歩連絡線"
                 }
             },
             "edges": {},
@@ -869,10 +923,13 @@
                 "versionName": "バージョン名",
                 "versionNotFound": "バージョンが存在しないか、取得できません",
                 "applySuccess": "バージョン {version} を適用しました"
+            },
+            "taipeiOpacity": {
+                "preset": "プリセット",
+                "opaque": "不透明"
             }
         }
     },
-
     "header": {
         "lineInfo": {
             "title": "路線情報設定",
@@ -1239,7 +1296,6 @@
             "slackContent": "Slackのチャンネルでチャットしましょう！"
         }
     },
-
     "contextMenu": {
         "refresh": "更新",
         "cut": "切り取り",
@@ -1258,7 +1314,6 @@
         "flipDiagonal135": "135° 線で反転",
         "reconcile": "統合"
     },
-
     "clipboard": {
         "errors": {
             "readText": "クリップボードを読み取れませんでした。ブラウザーの権限を確認して再試行してください。",
@@ -1266,7 +1321,6 @@
             "cannotPasteSpecificAttrs": "独自属性を貼り付けできません。互換性のある対象を選択し、クリップボードに有効な独自属性データがあることを確認してください。"
         }
     },
-
     "timeline": {
         "editor": {
             "title": "アニメーションタイムライン"
@@ -1355,6 +1409,5 @@
             "prepare": "準備中..."
         }
     },
-
     "localStorageQuotaExceeded": "ローカルストレージの上限に達しました。新しい変更は保存できません。"
 }
